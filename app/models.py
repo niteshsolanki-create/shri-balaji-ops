@@ -11,7 +11,16 @@ if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
 connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
-engine = create_engine(DATABASE_URL, connect_args=connect_args, pool_pre_ping=True)
+engine_kwargs = dict(connect_args=connect_args, pool_pre_ping=True)
+if not DATABASE_URL.startswith("sqlite"):
+    # SQLAlchemy's bulk "insertmanyvalues" strategy batches ~1000 rows into a
+    # single multi-row INSERT. When a column is entirely NULL across that whole
+    # batch (e.g. ds_delivery_date, final_received_qty on a fresh indent file),
+    # Postgres can misinfer that column's type and shift values between rows -
+    # this is what caused string titles to land in integer columns. Capping the
+    # page size avoids the batch shape that triggers it.
+    engine_kwargs["insertmanyvalues_page_size"] = 100
+engine = create_engine(DATABASE_URL, **engine_kwargs)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
 Base = declarative_base()
 
