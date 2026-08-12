@@ -1,6 +1,7 @@
 """Shri Balaji Ops - supply-chain analytics service."""
 import os
 import json
+import tempfile
 import hashlib
 import secrets
 import smtplib
@@ -16,7 +17,7 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from .models import (SessionLocal, init_db, User, DashboardTemplate, UploadLog,
                      AlertRule, AlertLog, DimStore)
-from .ingest import ingest_file
+from .ingest import ingest_path, ingest_file
 from . import analytics as A
 
 BASE = Path(__file__).parent
@@ -180,17 +181,75 @@ def api_dashboard(payload: dict, user=Depends(current_user), db=Depends(get_db))
 
 
 # ----------------------------- upload -------------------------------------
+SPOOL_CHUNK = 1024 * 1024          # 1MB at a time - never hold the file in RAM
+MAX_UPLOAD_MB = int(os.getenv("MAX_UPLOAD_MB", "1024"))
+
+
+async def spool_to_disk(upload: UploadFile) -> tuple[str, int]:
+    """
+    Write an incoming upload straight to a temp file in 1MB pieces.
+
+    The previous version did `content = await f.read()`, which materialised
+    the whole file in memory before pandas had even seen it - so a 200MB
+    file cost 200MB of RAM before any parsing work began. Streaming to disk
+    makes upload memory constant regardless of file size, and gives ingest
+    a path it can then read in chunks.
+    """
+    suffix = Path(upload.filename or "upload").suffix or ".dat"
+    fd, path = tempfile.mkstemp(suffix=suffix, prefix="upload_")
+    size = 0
+    limit = MAX_UPLOAD_MB * 1024 * 1024
+    try:
+        with os.fdopen(fd, "wb") as out:
+            while True:
+                chunk = await upload.read(SPOOL_CHUNK)
+                if not chunk:
+                    break
+                size += len(chunk)
+                if size > limit:
+                    raise ValueError(
+                        f"File is larger than the {MAX_UPLOAD_MB}MB limit. "
+                        f"Raise MAX_UPLOAD_MB or split the export by day.")
+                out.write(chunk)
+    except Exception:
+        if os.path.exists(path):
+            os.unlink(path)
+        raise
+    return path, size
+
+
 @app.post("/api/upload")
 async def api_upload(files: list[UploadFile] = File(...),
                      file_type: str = Form(None),
                      user=Depends(require_admin)):
+    """
+    Import one or more files. Each file is isolated: a failure on one is
+    reported against that file and the rest still load. The response ALWAYS
+    carries a `results` list, even on failure, so the frontend never has to
+    guess whether it can be read.
+    """
     results = []
     # Masters first so category/brand resolution is correct for the fact files
-    ordered = sorted(files, key=lambda f: 0 if "master" in f.filename.lower() else 1)
+    ordered = sorted(files, key=lambda f: 0 if "master" in (f.filename or "").lower() else 1)
     for f in ordered:
-        content = await f.read()
-        results.append(ingest_file(f.filename, content, user.email,
-                                   forced_type=file_type or None))
+        path = None
+        try:
+            path, size = await spool_to_disk(f)
+            r = ingest_path(f.filename, path, user.email,
+                            forced_type=file_type or None)
+            r["size_mb"] = round(size / (1024 * 1024), 1)
+            results.append(r)
+        except Exception as e:
+            results.append({"ok": False, "filename": f.filename,
+                            "error": str(e), "type": file_type or "unknown",
+                            "rows_in": 0, "rows_loaded": 0, "rows_dropped": 0,
+                            "dates": [], "notes": []})
+        finally:
+            if path and os.path.exists(path):
+                try:
+                    os.unlink(path)
+                except OSError:
+                    pass
     return {"results": results}
 
 
