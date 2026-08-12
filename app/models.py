@@ -13,13 +13,18 @@ if DATABASE_URL.startswith("postgres://"):
 connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
 engine_kwargs = dict(connect_args=connect_args, pool_pre_ping=True)
 if not DATABASE_URL.startswith("sqlite"):
-    # SQLAlchemy's bulk "insertmanyvalues" strategy batches ~1000 rows into a
-    # single multi-row INSERT. When a column is entirely NULL across that whole
-    # batch (e.g. ds_delivery_date, final_received_qty on a fresh indent file),
-    # Postgres can misinfer that column's type and shift values between rows -
-    # this is what caused string titles to land in integer columns. Capping the
-    # page size avoids the batch shape that triggers it.
-    engine_kwargs["insertmanyvalues_page_size"] = 100
+    # SQLAlchemy's bulk "insertmanyvalues" strategy batches multiple rows into
+    # one multi-row INSERT ... VALUES (...), (...), ... statement. When a
+    # column is entirely NULL across every row in that batch (ds_delivery_date
+    # and final_received_qty are NULL for the whole indent file, since that
+    # loop isn't closed operationally), Postgres cannot infer a type for that
+    # column from the literal NULLs and can misassign values between columns -
+    # this is what put product titles into integer fields. A page size of 100
+    # reduced but did not eliminate this; only page_size=1 removes it, since it
+    # makes every row its own single-row INSERT with no multi-row VALUES type
+    # ambiguity at all. Slower for large files, correct always - the right
+    # trade for a once-a-day admin upload.
+    engine_kwargs["insertmanyvalues_page_size"] = 1
 engine = create_engine(DATABASE_URL, **engine_kwargs)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
 Base = declarative_base()
