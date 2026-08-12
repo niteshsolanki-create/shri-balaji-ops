@@ -91,6 +91,15 @@ def _to_date(s):
     return pd.to_datetime(s, errors="coerce", dayfirst=True)
 
 
+def _maybe_flush(db, i, every=150):
+    """Bounds how many pending objects SQLAlchemy ever batches into one
+    multi-row INSERT. See the insertmanyvalues_page_size note in models.py -
+    this is the second half of that fix, applied at the loader level so it
+    holds regardless of engine configuration."""
+    if i and i % every == 0:
+        db.flush()
+
+
 def _int(v):
     if pd.isna(v):
         return 0
@@ -214,6 +223,7 @@ def load_batching(db, df):
             picked_by=r.get(_col(df, "picked by")),
             picked_at=str(r.get(_col(df, "picked at")))))
         rows += 1
+        _maybe_flush(db, rows)
     return rows, 0, dates, [f"Dispatch loaded for {len(dates)} date(s)."]
 
 
@@ -251,6 +261,7 @@ def load_store_receiving(db, df):
             status=r.get(_col(df, "status")),
             uploaded_at=str(r.get(_col(df, "uploaded at")))))
         rows += 1
+        _maybe_flush(db, rows)
 
     notes = [f"Loaded {len(dates)} date(s)."]
     if dropped:
@@ -281,6 +292,7 @@ def load_wh_receiving(db, df):
             expiry_date=exp.date() if pd.notna(exp) else None,
             short_qty=_int(r.get(_col(df, "short")))))
         rows += 1
+        _maybe_flush(db, rows)
     return rows, 0, dates, ["Category casing normalised."]
 
 
@@ -313,6 +325,7 @@ def load_rejects(db, df):
             warehouse_id=wh,
             vehicle_number=str(r.get(veh_c)) if veh_c and pd.notna(r.get(veh_c)) else None))
         rows += 1
+        _maybe_flush(db, rows)
 
     notes = []
     if corrupted:
@@ -347,6 +360,7 @@ def load_route(db, df):
             crate_in=_int(r.get(_col(df, "crate in"))) if _col(df, "crate in") else None,
             remark=r.get(_col(df, "remark"))))
         rows += 1
+        _maybe_flush(db, rows)
     return rows, 0, dates, ["Crate counts are per-vehicle, per-trip - they narrow a "
                             "swap to a route, not to a specific stop."]
 
@@ -370,6 +384,7 @@ def load_indent(db, df):
             title=r.get(_col(df, "title")),
             final_received_qty=_int(r.get(frq)) if frq and pd.notna(r.get(frq)) else None))
         rows += 1
+        _maybe_flush(db, rows)
 
     notes = []
     if frq and df[frq].isna().all():
