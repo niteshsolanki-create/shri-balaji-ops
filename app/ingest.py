@@ -17,7 +17,7 @@ import hashlib
 from datetime import datetime
 
 import pandas as pd
-from sqlalchemy import delete
+from sqlalchemy import delete, insert
 
 from .models import (SessionLocal, DimStore, DimProduct, FactDispatch,
                      FactStoreReceiving, FactWarehouseReceiving, FactReject,
@@ -92,12 +92,31 @@ def _to_date(s):
 
 
 def _maybe_flush(db, i, every=150):
-    """Bounds how many pending objects SQLAlchemy ever batches into one
-    multi-row INSERT. See the insertmanyvalues_page_size note in models.py -
-    this is the second half of that fix, applied at the loader level so it
-    holds regardless of engine configuration."""
     if i and i % every == 0:
         db.flush()
+
+
+def bulk_insert(db, model, rows, chunk_size=1000):
+    """
+    Plain Core INSERT with no RETURNING clause, executed in chunks.
+
+    db.add(Model(...)) always asks Postgres to RETURN the new primary key,
+    which routes every bulk save through SQLAlchemy's "insertmanyvalues"
+    machinery. That code path has a real bug: when a column is entirely NULL
+    across the rows in one internal batch (brand and picked_by are frequently
+    None here - unmatched FSNs, unassigned pickers), Postgres can misinfer
+    that column's type and shift values into the wrong column entirely -
+    this is what put a picker's name into an integer field, then a product
+    title into another. None of these fact tables' auto-generated IDs are
+    read back anywhere in this app, so there's no reason to pay for
+    RETURNING at all: dropping it removes the buggy code path completely,
+    for every table, rather than patching each column it happens to hit.
+    """
+    if not rows:
+        return 0
+    for i in range(0, len(rows), chunk_size):
+        db.execute(insert(model), rows[i:i + chunk_size])
+    return len(rows)
 
 
 def _int(v):
@@ -166,11 +185,11 @@ def load_store_master(db, df):
                             _col(df, "facility"): "warehouse_id"})
     df["warehouse_id"] = df["warehouse_id"].astype(str).str.lower().str.strip()
     db.query(DimStore).delete()
-    for _, r in df.iterrows():
-        db.add(DimStore(warehouse_id=r["warehouse_id"],
-                        warehouse_name=r.get("warehouse_name"),
-                        city_code=str(r["warehouse_id"]).split("_")[0],
-                        wh_serial_no=_int(r.get("wh_serial_no"))))
+    rows = [dict(warehouse_id=r["warehouse_id"], warehouse_name=r.get("warehouse_name"),
+                city_code=str(r["warehouse_id"]).split("_")[0],
+                wh_serial_no=_int(r.get("wh_serial_no")))
+            for _, r in df.iterrows()]
+    bulk_insert(db, DimStore, rows)
     return len(df), 0, [], ["Store master replaced in full."]
 
 
@@ -186,13 +205,12 @@ def load_product_master(db, df):
     df = df.drop_duplicates(subset="fsn", keep="first")
     dropped = n_in - len(df)
     db.query(DimProduct).delete()
-    for _, r in df.iterrows():
-        db.add(DimProduct(fsn=r["fsn"], ean=str(r.get("ean"))[:20],
-                          brand=r.get("brand"),
-                          category=canon_category(r.get("category")),
-                          title=r.get("title"),
-                          mrp=r.get("mrp") if pd.notna(r.get("mrp")) else None,
-                          price=r.get("price") if pd.notna(r.get("price")) else None))
+    rows = [dict(fsn=r["fsn"], ean=str(r.get("ean"))[:20], brand=r.get("brand"),
+                category=canon_category(r.get("category")), title=r.get("title"),
+                mrp=r.get("mrp") if pd.notna(r.get("mrp")) else None,
+                price=r.get("price") if pd.notna(r.get("price")) else None)
+            for _, r in df.iterrows()]
+    bulk_insert(db, DimProduct, rows)
     notes = [f"Category casing normalised; {dropped} duplicate FSN rows collapsed."]
     return len(df), dropped, [], notes
 
@@ -205,26 +223,24 @@ def load_batching(db, df):
     _replace_dates(db, FactDispatch, FactDispatch.dispatch_date, dates)
 
     wh = _col(df, "store_id") or _col(df, "store", "id")
-    rows = 0
+    fsn_c, po_c, pt_c = _col(df, "fsn"), _col(df, "po number"), _col(df, "product title")
+    exp_c, pk_c, sh_c, pd_c = (_col(df, "expected qty"), _col(df, "picked qty"),
+                                _col(df, "shortage qty"), _col(df, "pending qty"))
+    st_c, pb_c, pa_c = _col(df, "status"), _col(df, "picked by"), _col(df, "picked at")
+
+    rows = []
     for _, r in df.iterrows():
-        fsn = str(r[_col(df, "fsn")]).strip()
+        fsn = str(r[fsn_c]).strip()
         cat, brand = _resolve_cat_brand(fsn, prod)
-        db.add(FactDispatch(
+        rows.append(dict(
             dispatch_date=r["_date"], cutoff_datetime=str(r[cutoff]),
-            po_number=str(r[_col(df, "po number")]), fsn=fsn,
-            product_title=r.get(_col(df, "product title")),
-            warehouse_id=str(r[wh]).lower().strip(),
-            category=cat, brand=brand,
-            expected_qty=_int(r[_col(df, "expected qty")]),
-            picked_qty=_int(r[_col(df, "picked qty")]),
-            shortage_qty=_int(r[_col(df, "shortage qty")]),
-            pending_qty=_int(r[_col(df, "pending qty")]),
-            status=r.get(_col(df, "status")),
-            picked_by=r.get(_col(df, "picked by")),
-            picked_at=str(r.get(_col(df, "picked at")))))
-        rows += 1
-        _maybe_flush(db, rows)
-    return rows, 0, dates, [f"Dispatch loaded for {len(dates)} date(s)."]
+            po_number=str(r[po_c]), fsn=fsn, product_title=r.get(pt_c),
+            warehouse_id=str(r[wh]).lower().strip(), category=cat, brand=brand,
+            expected_qty=_int(r[exp_c]), picked_qty=_int(r[pk_c]),
+            shortage_qty=_int(r[sh_c]), pending_qty=_int(r[pd_c]),
+            status=r.get(st_c), picked_by=r.get(pb_c), picked_at=str(r.get(pa_c))))
+    bulk_insert(db, FactDispatch, rows)
+    return len(rows), 0, dates, [f"Dispatch loaded for {len(dates)} date(s)."]
 
 
 def load_store_receiving(db, df):
@@ -242,33 +258,34 @@ def load_store_receiving(db, df):
     _replace_dates(db, FactStoreReceiving, FactStoreReceiving.invoice_date, dates)
 
     swap_c = _col(df, "swapped")
-    rows = 0
+    fsn_c = _col(df, "fsn")
+    inv_c, desc_c = _col(df, "invoice id"), _col(df, "description")
+    exp_c, rec_c = _col(df, "expected quantity"), _col(df, "received quantity")
+    dmg_c, sc_c = _col(df, "damaged quantity"), _col(df, "scanning issue quantity")
+    ex_c, ret_c = _col(df, "excess quantity"), _col(df, "returned quantity")
+    st_c, up_c = _col(df, "status"), _col(df, "uploaded at")
+
+    rows = []
     for _, r in df.iterrows():
-        fsn = str(r[_col(df, "fsn")]).strip()
+        fsn = str(r[fsn_c]).strip()
         cat, brand = _resolve_cat_brand(fsn, prod)
-        db.add(FactStoreReceiving(
+        rows.append(dict(
             invoice_date=r["_date"], warehouse_id=r["_wh"],
-            invoice_id=str(r[_col(df, "invoice id")]), fsn=fsn,
-            description=r.get(_col(df, "description")),
+            invoice_id=str(r[inv_c]), fsn=fsn, description=r.get(desc_c),
             category=cat, brand=brand,
-            expected_qty=_int(r[_col(df, "expected quantity")]),
-            received_qty=_int(r[_col(df, "received quantity")]),
-            damaged_qty=_int(r[_col(df, "damaged quantity")]),
-            scanning_issue_qty=_int(r[_col(df, "scanning issue quantity")]),
-            excess_qty=_int(r[_col(df, "excess quantity")]),
-            returned_qty=_int(r[_col(df, "returned quantity")]),
+            expected_qty=_int(r[exp_c]), received_qty=_int(r[rec_c]),
+            damaged_qty=_int(r[dmg_c]), scanning_issue_qty=_int(r[sc_c]),
+            excess_qty=_int(r[ex_c]), returned_qty=_int(r[ret_c]),
             swapped_qty=_int(r[swap_c]) if swap_c else 0,
-            status=r.get(_col(df, "status")),
-            uploaded_at=str(r.get(_col(df, "uploaded at")))))
-        rows += 1
-        _maybe_flush(db, rows)
+            status=r.get(st_c), uploaded_at=str(r.get(up_c))))
+    bulk_insert(db, FactStoreReceiving, rows)
 
     notes = [f"Loaded {len(dates)} date(s)."]
     if dropped:
         notes.append(
             f"{dropped} rows ({dropped/n_in:.1%}) belonged to darkstores outside "
             f"your 48-store network and were excluded. Flipkart's export is national.")
-    return rows, dropped, dates, notes
+    return len(rows), dropped, dates, notes
 
 
 def load_wh_receiving(db, df):
@@ -278,22 +295,24 @@ def load_wh_receiving(db, df):
     _replace_dates(db, FactWarehouseReceiving, FactWarehouseReceiving.date, dates)
 
     exp_c = _col(df, "expiry")
-    rows = 0
+    fsn_c = _col(df, "fsn")
+    ean_c, prod_c, brand_c, cat_c = (_col(df, "ean"), _col(df, "product"),
+                                      _col(df, "brand"), _col(df, "category"))
+    poq_c, rec_c, sh_c = _col(df, "po qty"), _col(df, "received"), _col(df, "short")
+
+    rows = []
     for _, r in df.iterrows():
-        fsn = str(r[_col(df, "fsn")]).strip()
-        cat = canon_category(r.get(_col(df, "category"))) or category_from_fsn(fsn)
+        fsn = str(r[fsn_c]).strip()
+        cat = canon_category(r.get(cat_c)) or category_from_fsn(fsn)
         exp = _to_date(r.get(exp_c)) if exp_c else None
-        db.add(FactWarehouseReceiving(
-            date=r["_date"], ean=str(r.get(_col(df, "ean")))[:20], fsn=fsn,
-            product=r.get(_col(df, "product")), brand=r.get(_col(df, "brand")),
-            category=cat,
-            po_qty=_int(r.get(_col(df, "po qty"))),
-            received_qty=_int(r.get(_col(df, "received"))),
+        rows.append(dict(
+            date=r["_date"], ean=str(r.get(ean_c))[:20], fsn=fsn,
+            product=r.get(prod_c), brand=r.get(brand_c), category=cat,
+            po_qty=_int(r.get(poq_c)), received_qty=_int(r.get(rec_c)),
             expiry_date=exp.date() if pd.notna(exp) else None,
-            short_qty=_int(r.get(_col(df, "short")))))
-        rows += 1
-        _maybe_flush(db, rows)
-    return rows, 0, dates, ["Category casing normalised."]
+            short_qty=_int(r.get(sh_c))))
+    bulk_insert(db, FactWarehouseReceiving, rows)
+    return len(rows), 0, dates, ["Category casing normalised."]
 
 
 def load_rejects(db, df):
@@ -306,36 +325,37 @@ def load_rejects(db, df):
     veh_c = _col(df, "vehicle")
     exp_c = _col(df, "expiry")
     fsn_c = _col(df, "fsn")
+    ean_c, prod_c, brand_c, cat_c, rea_c = (_col(df, "ean"), _col(df, "product"),
+                                              _col(df, "brand"), _col(df, "category"),
+                                              _col(df, "reason"))
 
-    rows = corrupted = 0
     df = df[df[fsn_c].notna()]
+    rows, corrupted = [], 0
     for _, r in df.iterrows():
         fsn = str(r[fsn_c]).strip()
         qty, was_bad = fix_excel_date_qty(r.get(qty_c))
         corrupted += 1 if was_bad else 0
         exp = _to_date(r.get(exp_c)) if exp_c else None
         wh = str(r.get(store_c)).lower().strip() if store_c and pd.notna(r.get(store_c)) else None
-        db.add(FactReject(
-            date=r["_date"], ean=str(r.get(_col(df, "ean")))[:20], fsn=fsn,
-            product=r.get(_col(df, "product")), brand=r.get(_col(df, "brand")),
-            category=canon_category(r.get(_col(df, "category"))) or category_from_fsn(fsn),
-            qty=qty, qty_was_corrupted=was_bad,
-            reason=r.get(_col(df, "reason")),
+        rows.append(dict(
+            date=r["_date"], ean=str(r.get(ean_c))[:20], fsn=fsn,
+            product=r.get(prod_c), brand=r.get(brand_c),
+            category=canon_category(r.get(cat_c)) or category_from_fsn(fsn),
+            qty=qty, qty_was_corrupted=was_bad, reason=r.get(rea_c),
             expiry=exp.date() if exp is not None and pd.notna(exp) else None,
             warehouse_id=wh,
             vehicle_number=str(r.get(veh_c)) if veh_c and pd.notna(r.get(veh_c)) else None))
-        rows += 1
-        _maybe_flush(db, rows)
+    bulk_insert(db, FactReject, rows)
 
     notes = []
     if corrupted:
         notes.append(
-            f"{corrupted}/{rows} QTY values had been converted to dates by Excel "
+            f"{corrupted}/{len(rows)} QTY values had been converted to dates by Excel "
             f"(cell formatted as date). Original integers recovered.")
     if not store_c or df[store_c].isna().all():
         notes.append("No store attribution in this file - rejects cannot be traced "
                      "to a specific darkstore.")
-    return rows, 0, dates, notes
+    return len(rows), 0, dates, notes
 
 
 def load_route(db, df):
@@ -345,24 +365,26 @@ def load_route(db, df):
     _replace_dates(db, FactRoute, FactRoute.date, dates)
 
     store_c = _col(df, "store no") or _col(df, "store")
-    rows = 0
+    sno_c, drv_c, veh_c = _col(df, "sno"), _col(df, "driver"), _col(df, "vehicle")
+    st_c, en_c = _col(df, "start"), _col(df, "end")
+    co_c, ci_c, rm_c = _col(df, "crate out"), _col(df, "crate in"), _col(df, "remark")
+
+    rows = []
     for _, r in df.iterrows():
         raw = str(r.get(store_c, "")).lower().strip()
         wh = raw if raw in valid else None
-        db.add(FactRoute(
-            date=r["_date"], stop_seq=_int(r.get(_col(df, "sno"))),
-            warehouse_id=wh, store_name=str(r.get(store_c)),
-            driver=r.get(_col(df, "driver")),
-            vehicle_no=str(r.get(_col(df, "vehicle"))).strip(),
-            out_time=str(r.get(_col(df, "start"))) if _col(df, "start") else None,
-            in_time=str(r.get(_col(df, "end"))) if _col(df, "end") else None,
-            crate_out=_int(r.get(_col(df, "crate out"))) if _col(df, "crate out") else None,
-            crate_in=_int(r.get(_col(df, "crate in"))) if _col(df, "crate in") else None,
-            remark=r.get(_col(df, "remark"))))
-        rows += 1
-        _maybe_flush(db, rows)
-    return rows, 0, dates, ["Crate counts are per-vehicle, per-trip - they narrow a "
-                            "swap to a route, not to a specific stop."]
+        rows.append(dict(
+            date=r["_date"], stop_seq=_int(r.get(sno_c)),
+            warehouse_id=wh, store_name=str(r.get(store_c)), driver=r.get(drv_c),
+            vehicle_no=str(r.get(veh_c)).strip(),
+            out_time=str(r.get(st_c)) if st_c else None,
+            in_time=str(r.get(en_c)) if en_c else None,
+            crate_out=_int(r.get(co_c)) if co_c else None,
+            crate_in=_int(r.get(ci_c)) if ci_c else None,
+            remark=r.get(rm_c)))
+    bulk_insert(db, FactRoute, rows)
+    return len(rows), 0, dates, ["Crate counts are per-vehicle, per-trip - they narrow a "
+                                 "swap to a route, not to a specific stop."]
 
 
 def load_indent(db, df):
@@ -372,33 +394,25 @@ def load_indent(db, df):
     _replace_dates(db, FactIndent, FactIndent.indent_date, dates)
 
     frq = _col(df, "final received")
-    rows = 0
+    pod_c, brd_c, fsn_c = _col(df, "po date"), _col(df, "brand"), _col(df, "fsn")
+    poq_c, vert_c, ttl_c = _col(df, "po qty"), _col(df, "vertical"), _col(df, "title")
+
+    rows = []
     for _, r in df.iterrows():
-        db.add(FactIndent(
+        pod = _to_date(r.get(pod_c))
+        rows.append(dict(
             indent_date=r["_date"],
-            po_date=_to_date(r.get(_col(df, "po date"))).date() if pd.notna(r.get(_col(df, "po date"))) else None,
-            brand=r.get(_col(df, "brand")),
-            fsn=str(r.get(_col(df, "fsn"))).strip(),
-            po_qty=_int(r.get(_col(df, "po qty"))),
-            vertical=r.get(_col(df, "vertical")),
-            title=r.get(_col(df, "title")),
+            po_date=pod.date() if pd.notna(pod) else None,
+            brand=r.get(brd_c), fsn=str(r.get(fsn_c)).strip(),
+            po_qty=_int(r.get(poq_c)), vertical=r.get(vert_c), title=r.get(ttl_c),
             final_received_qty=_int(r.get(frq)) if frq and pd.notna(r.get(frq)) else None))
-        rows += 1
-        # Flush every single row (not batched) - this table has columns that
-        # are entirely NULL across the whole file (final_received_qty,
-        # ds_delivery_date), which trips a Postgres/SQLAlchemy multi-row
-        # VALUES type-inference bug when more than one such row is batched
-        # together. Indent files are small (low thousands of rows), so the
-        # per-row round-trip cost is negligible here - unlike batching or
-        # store-receiving files, which can run into six figures of rows and
-        # must stay on fast bulk inserts.
-        db.flush()
+    bulk_insert(db, FactIndent, rows)
 
     notes = []
     if frq and df[frq].isna().all():
         notes.append("'Final Received Qty' is empty for every row - the indent loop "
                      "is not being closed operationally.")
-    return rows, 0, dates, notes
+    return len(rows), 0, dates, notes
 
 
 LOADERS = {
