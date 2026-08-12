@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Sign in - Shri Balaji Ops</title>
+<link rel="stylesheet" href="/static/styles.css">
+</head><body>
+<div class="login-wrap"><div class="login-card">
+  <h1>Shri Balaji Ops</h1>
+  <p class="sub">Supply-chain analytics &middot; Gurgaon warehouse</p>
+  {% if error %}<div class="err">{{ error }}</div>{% endif %}
+  <form method="post" action="/login">
+    <div class="field"><label>Email</label><input type="email" name="email" required autofocus></div>
+    <div class="field"><label>Password</label><input type="password" name="password" required></div>
+    <button class="btn" style="width:100%" type="submit">Sign in</button>
+  </form>
+</div></div>
+</body></html>

@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Shri Balaji Ops</title>
+<link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+
+<div class="topbar">
+  <div class="brand">
+    <div class="mark">SB</div>
+    <div><b>Shri Balaji Ops</b><span id="coverage">loading…</span></div>
+  </div>
+  <div class="topbar-right">
+    <span>{{ user.name }}</span>
+    <span class="role-chip">{{ user.role }}</span>
+    <a href="/logout">Sign out</a>
+  </div>
+</div>
+
+<div class="tabs">
+  <div class="tab active" data-view="dashboard">Dashboard</div>
+  <div class="tab" data-view="products">Products</div>
+  <div class="tab" data-view="swaps">Route &amp; Swaps</div>
+  <div class="tab" data-view="rejects">Rejects</div>
+  <div class="tab" data-view="quality">Data Quality</div>
+  <div class="tab" data-view="views">My Views</div>
+  {% if user.role == 'admin' %}
+  <div class="tab" data-view="upload">Upload</div>
+  <div class="tab" data-view="alerts">Alerts</div>
+  <div class="tab" data-view="team">Team</div>
+  {% endif %}
+</div>
+
+<!-- ============ FILTER BAR (shared) ============ -->
+<div style="max-width:1500px;margin:0 auto;padding:22px 22px 0" id="filterHost">
+  <div class="filterbar">
+    <div class="filter-head">
+      <div class="filter-title">Filters — every number below recalculates</div>
+      <div class="filter-actions">
+        <select id="quickRange" style="width:auto;padding:7px 10px;font-size:12px">
+          <option value="">Custom range</option>
+          <option value="1">Latest day</option>
+          <option value="7" selected>Last 7 days</option>
+          <option value="14">Last 14 days</option>
+          <option value="0">All loaded data</option>
+        </select>
+        <button class="btn sm ghost" id="resetBtn">Reset</button>
+        <button class="btn sm" id="applyBtn">Apply</button>
+      </div>
+    </div>
+    <div class="filter-grid">
+      <div class="field" style="margin:0"><label>From</label><input type="date" id="dateFrom"></div>
+      <div class="field" style="margin:0"><label>To</label><input type="date" id="dateTo"></div>
+      <div class="field" style="margin:0"><label>Category</label><div class="ms" data-key="categories"></div></div>
+      <div class="field" style="margin:0"><label>Brand</label><div class="ms" data-key="brands"></div></div>
+      <div class="field" style="margin:0"><label>Store</label><div class="ms" data-key="stores"></div></div>
+      <div class="field" style="margin:0"><label>Vehicle</label><div class="ms" data-key="vehicles"></div></div>
+    </div>
+    <div class="chipbar" id="chipbar"></div>
+  </div>
+</div>
+
+<!-- ============ DASHBOARD ============ -->
+<div class="view active" id="view-dashboard">
+  <div class="kpis" id="kpis"></div>
+
+  <div class="panel">
+    <div class="panel-head">
+      <div>
+        <div class="panel-title">Packet journey</div>
+        <div class="panel-sub">Ordered → picked → received, traced across the batching and GRN files. The
+          two losses are different problems: what never left the warehouse isn't claimable against Flipkart.</div>
+      </div>
+    </div>
+    <div class="funnel" id="funnel"></div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-head">
+      <div>
+        <div class="panel-title">Claimable gap over time</div>
+        <div class="panel-sub">Dispatched minus received minus recorded damage, by day.</div>
+      </div>
+      <div class="mono muted" style="font-size:11px">target 0.20%</div>
+    </div>
+    <div id="trend"></div>
+  </div>
+
+  <div class="grid2">
+    <div class="panel">
+      <div class="panel-head"><div>
+        <div class="panel-title">Store ranking</div>
+        <div class="panel-sub">A store is marked <b>Repeat</b> only when it breaches on most of its
+          loaded days with meaningful volume — one bad day is noise, not a pattern.</div>
+      </div></div>
+      <div class="tbl-wrap"><table id="storeTbl"></table></div>
+    </div>
+    <div class="panel">
+      <div class="panel-head"><div><div class="panel-title">Category breakdown</div>
+        <div class="panel-sub">Claimable gap by category.</div></div></div>
+      <div id="catList"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ PRODUCTS ============ -->
+<div class="view" id="view-products">
+  <div class="panel">
+    <div class="panel-head"><div>
+      <div class="panel-title">Product-level shortage</div>
+      <div class="panel-sub">Sorted by units unaccounted for. A product short at nearly every store on the
+        same day points upstream — to picking or counting — not to the stores.</div>
+    </div></div>
+    <div class="tbl-wrap"><table id="prodTbl"></table></div>
+  </div>
+</div>
+
+<!-- ============ SWAPS ============ -->
+<div class="view" id="view-swaps">
+  <div class="panel">
+    <div class="panel-head"><div>
+      <div class="panel-title">Excess / shortage cross-reference</div>
+      <div class="panel-sub">Where the same product was short at one store and excess at another on the same
+        day. <b>Same-vehicle</b> pairs are the ones worth a phone call; a shortage spread thin across many
+        stores usually means an upstream count problem, not a crate swap. The evidence is laid out —
+        the call is yours.</div>
+    </div></div>
+    <div id="swapList"></div>
+  </div>
+</div>
+
+<!-- ============ REJECTS ============ -->
+<div class="view" id="view-rejects">
+  <div class="panel">
+    <div class="panel-head"><div><div class="panel-title">Rejects &amp; damage</div>
+      <div class="panel-sub">By reason and category.</div></div></div>
+    <div class="tbl-wrap"><table id="rejTbl"></table></div>
+  </div>
+</div>
+
+<!-- ============ QUALITY ============ -->
+<div class="view" id="view-quality">
+  <div class="panel">
+    <div class="panel-head"><div><div class="panel-title">Data quality</div>
+      <div class="panel-sub">Problems in the inputs, so a broken file is never mistaken for a broken store.</div>
+    </div></div>
+    <div id="qualityList"></div>
+  </div>
+  <div class="panel">
+    <div class="panel-head"><div><div class="panel-title">Upload history</div></div></div>
+    <div class="tbl-wrap"><table id="uploadTbl"></table></div>
+  </div>
+</div>
+
+<!-- ============ VIEWS ============ -->
+<div class="view" id="view-views">
+  <div class="panel">
+    <div class="panel-head"><div>
+      <div class="panel-title">Saved views</div>
+      <div class="panel-sub">A view stores the current filters <em>and</em> which panels are shown. Build
+        "Morning check" or "Flipkart claims" once, reopen it against fresh data any day.</div>
+    </div></div>
+    <div style="display:flex;gap:9px;flex-wrap:wrap;align-items:flex-end;margin-bottom:8px">
+      <div class="field" style="margin:0;flex:1;min-width:200px">
+        <label>Name this view</label><input id="tmplName" placeholder="e.g. Morning check — milk only">
+      </div>
+      <button class="btn" id="saveTmpl">Save current setup</button>
+    </div>
+    <div class="wg" id="widgetPicker"></div>
+  </div>
+  <div class="panel">
+    <div class="panel-head"><div><div class="panel-title">Your views</div></div></div>
+    <div id="tmplList"></div>
+  </div>
+</div>
+
+<!-- ============ UPLOAD ============ -->
+{% if user.role == 'admin' %}
+<div class="view" id="view-upload">
+  <div class="panel">
+    <div class="panel-head"><div>
+      <div class="panel-title">Daily upload</div>
+      <div class="panel-sub">Drop the day's exports — batching, store receiving, warehouse receiving,
+        rejects, route, indent. Type is detected from the columns. Re-uploading a date replaces it rather
+        than double-counting, so overlapping historical exports are safe.</div>
+    </div></div>
+    <div class="drop" id="drop">
+      <h3>Drop files here</h3>
+      <p>.xlsx or .csv — several at once is fine</p>
+      <input type="file" id="fileInput" multiple hidden accept=".csv,.xlsx,.xls,.xlsm">
+      <button class="btn ghost" onclick="document.getElementById('fileInput').click()">Choose files</button>
+    </div>
+    <div class="filelist" id="fileList"></div>
+    <div style="margin-top:14px;display:none" id="uploadActions">
+      <button class="btn" id="uploadBtn">Import</button>
+      <button class="btn ghost sm" id="clearFiles">Clear</button>
+    </div>
+    <div id="uploadResults" style="margin-top:16px"></div>
+  </div>
+</div>
+
+<div class="view" id="view-alerts">
+  <div class="panel">
+    <div class="panel-head"><div>
+      <div class="panel-title">Email digest</div>
+      <div class="panel-sub">Fires only on repeated breaches over a 7-day window — a store crossing the
+        threshold once won't trigger it. Preview shows exactly what would land in the inbox.</div>
+    </div><button class="btn sm" id="runAlerts">Send now</button></div>
+    <pre class="digest" id="alertPreview">Loading…</pre>
+  </div>
+</div>
+
+<div class="view" id="view-team">
+  <div class="panel">
+    <div class="panel-head"><div>
+      <div class="panel-title">Team access</div>
+      <div class="panel-sub">Viewers see every dashboard but cannot upload or change data.</div>
+    </div></div>
+    <div style="display:flex;gap:9px;flex-wrap:wrap;align-items:flex-end;margin-bottom:16px">
+      <div class="field" style="margin:0;flex:1;min-width:140px"><label>Name</label><input id="nuName"></div>
+      <div class="field" style="margin:0;flex:1;min-width:180px"><label>Email</label><input id="nuEmail" type="email"></div>
+      <div class="field" style="margin:0;min-width:130px"><label>Temp password</label><input id="nuPass" value="changeme"></div>
+      <div class="field" style="margin:0;min-width:110px"><label>Role</label>
+        <select id="nuRole"><option value="viewer">Viewer</option><option value="admin">Admin</option></select></div>
+      <button class="btn" id="addUser">Add</button>
+    </div>
+    <div class="tbl-wrap"><table id="userTbl"></table></div>
+  </div>
+</div>
+{% endif %}
+
+<script>window.USER = {{ user|tojson }};</script>
+<script src="/static/app.js"></script>
+</body>
+</html>
