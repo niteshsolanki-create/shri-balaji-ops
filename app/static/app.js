@@ -452,20 +452,60 @@ if (window.USER.role === 'admin') {
     queue.forEach(f => fd.append('files', f));
     try {
       const r = await fetch('/api/upload', { method: 'POST', body: fd });
-      const j = await r.json();
-      $('#uploadResults').innerHTML = j.results.map(x => x.ok
-        ? `<div class="res ok"><b>${x.type}</b> — ${n(x.rows_loaded)} rows loaded${
-            x.rows_dropped ? `, ${n(x.rows_dropped)} excluded` : ''}${
-            x.dates.length ? ` · ${x.dates.join(', ')}` : ''}
-            ${x.notes.length ? `<div class="rnote">${x.notes.join('<br>')}</div>` : ''}</div>`
-        : `<div class="res bad"><b>${x.filename}</b> — ${x.error}</div>`).join('');
+
+      // The old code went straight to j.results.map(). When the server
+      // returned an error the body had no results array, .map() threw, and
+      // the catch below reported "Import failed" - making a server-side
+      // problem look like a frontend one. Each failure mode now reports
+      // itself accurately.
+      let j = null;
+      try { j = await r.json(); } catch (_) { j = null; }
+
+      if (!r.ok) {
+        const msg = (j && (j.detail || j.error)) ||
+          (r.status === 413 ? 'File too large for the server to accept.' :
+           r.status === 502 || r.status === 503 ?
+             'The server restarted mid-import — usually it ran out of memory. Try one file at a time, or a bigger instance.' :
+             `Server returned ${r.status}.`);
+        $('#uploadResults').innerHTML = `<div class="res bad"><b>Upload rejected</b> — ${msg}</div>`;
+        toast('Upload rejected — see details');
+        btn.disabled = false; btn.textContent = 'Import';
+        return;
+      }
+      if (!j || !Array.isArray(j.results)) {
+        $('#uploadResults').innerHTML =
+          '<div class="res bad"><b>Unexpected response</b> — the import may have partly succeeded. Check the Uploads tab before re-importing.</div>';
+        loadUploads && loadUploads();
+        btn.disabled = false; btn.textContent = 'Import';
+        return;
+      }
+
+      $('#uploadResults').innerHTML = j.results.map(x => {
+        const dates = Array.isArray(x.dates) ? x.dates : [];
+        const notes = Array.isArray(x.notes) ? x.notes : [];
+        const size = x.size_mb ? ` <span class="muted">(${x.size_mb} MB)</span>` : '';
+        return x.ok
+          ? `<div class="res ok"><b>${x.type}</b> — ${n(x.rows_loaded)} rows loaded${
+              x.rows_dropped ? `, ${n(x.rows_dropped)} excluded` : ''}${
+              dates.length ? ` · ${dates.join(', ')}` : ''}${size}
+              ${notes.length ? `<div class="rnote">${notes.join('<br>')}</div>` : ''}</div>`
+          : `<div class="res bad"><b>${x.filename || 'File'}</b> — ${x.error || 'Import failed'}</div>`;
+      }).join('');
+
+      const failed = j.results.filter(x => !x.ok).length;
       queue = []; refresh();
       S.options = await (await fetch('/api/options')).json();
       $$('.ms').forEach(buildMulti);
       $('#coverage').textContent = `${S.options.stores.length} stores · data ${S.options.date_min} → ${S.options.date_max}`;
       applyQuickRange(); await load();
-      toast('Import finished — dashboard refreshed');
-    } catch (e) { toast('Import failed: ' + e.message); }
+      toast(failed
+        ? `${j.results.length - failed} of ${j.results.length} files imported — ${failed} failed`
+        : 'Import finished — dashboard refreshed');
+    } catch (e) {
+      $('#uploadResults').innerHTML =
+        `<div class="res bad"><b>Could not reach the server</b> — ${e.message}. The import may have partly succeeded; check the Uploads tab.</div>`;
+      toast('Upload interrupted — see details');
+    }
     btn.disabled = false; btn.textContent = 'Import';
   };
 
