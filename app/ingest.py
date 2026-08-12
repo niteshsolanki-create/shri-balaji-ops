@@ -384,7 +384,15 @@ def load_indent(db, df):
             title=r.get(_col(df, "title")),
             final_received_qty=_int(r.get(frq)) if frq and pd.notna(r.get(frq)) else None))
         rows += 1
-        _maybe_flush(db, rows)
+        # Flush every single row (not batched) - this table has columns that
+        # are entirely NULL across the whole file (final_received_qty,
+        # ds_delivery_date), which trips a Postgres/SQLAlchemy multi-row
+        # VALUES type-inference bug when more than one such row is batched
+        # together. Indent files are small (low thousands of rows), so the
+        # per-row round-trip cost is negligible here - unlike batching or
+        # store-receiving files, which can run into six figures of rows and
+        # must stay on fast bulk inserts.
+        db.flush()
 
     notes = []
     if frq and df[frq].isna().all():
