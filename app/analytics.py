@@ -340,4 +340,20 @@ def data_quality(db, f):
             "title": f"Only {total_days} day(s) of history loaded",
             "detail": "Repeat-offender flagging needs at least 7 days before a store "
                       "ranking means anything. Upload the historical exports."})
+
+    # A file named for a date range but carrying one date usually means the
+    # export ran with the wrong range, or padded the file with blank rows.
+    # Worth surfacing here rather than only in the upload note, since the
+    # symptom people notice is "the dashboard looks empty".
+    from .models import UploadLog
+    padded = (db.query(UploadLog)
+              .filter(UploadLog.notes.like("%blank padding%"))
+              .order_by(UploadLog.uploaded_at.desc()).first())
+    if padded:
+        issues.append({
+            "severity": "medium",
+            "title": "Latest store-receiving export contained blank padding rows",
+            "detail": f"{padded.filename} covered {padded.dates_covered} but most of "
+                      f"the file was empty rows. If you were expecting a date range, "
+                      f"re-run the export with the full range selected."})
     return issues
