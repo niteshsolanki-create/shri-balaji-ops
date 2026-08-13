@@ -95,6 +95,7 @@ input:focus,select:focus{outline:none;border-color:var(--cold)}
 .seg-btn.active{background:var(--raised);color:var(--text)}
 .gap-bad{color:var(--bad)}
 .gap-ok{color:var(--muted)}
+.tag-unref{display:inline-block;font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);background:var(--raised);border:1px solid var(--border);border-radius:5px;padding:2px 7px}
 .grid2{display:grid;grid-template-columns:1.55fr 1fr;gap:16px}
 @media(max-width:1040px){.grid2{grid-template-columns:1fr}.kpis{grid-template-columns:1fr 1fr}}
 @media(max-width:620px){.kpis{grid-template-columns:1fr}}
