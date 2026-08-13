@@ -437,10 +437,12 @@ def load_wh_receiving(db, df, ctx, progress=None, replace=True):
         _replace_dates(db, FactWarehouseReceiving, FactWarehouseReceiving.date, dates)
 
     exp_c, cat_c, sh_c = _col(df, "expiry"), _col(df, "category"), _col(df, "short")
+    ref_c = _col(df, "po reference")
     fsn = v_str(df[_col(df, "fsn")])
     out = pd.DataFrame({
         "date": dt.dt.date,
         "ean": v_str(df[_col(df, "ean")], maxlen=20),
+        "po_reference": v_str(df[ref_c]) if ref_c else "",
         "fsn": fsn,
         "product": v_str(df[_col(df, "product")]),
         "brand": v_str(df[_col(df, "brand")]),
@@ -452,7 +454,8 @@ def load_wh_receiving(db, df, ctx, progress=None, replace=True):
     })
     cols = list(out.columns)
     n = copy_into(out, "fact_wh_receiving", cols, progress)
-    return n, 0, dates, {}
+    has_ref = bool(ref_c) and not out["po_reference"].eq("").all()
+    return n, 0, dates, {"wh_has_ref": 1 if has_ref else 0}
 
 
 def load_rejects(db, df, ctx, progress=None, replace=True):
@@ -532,9 +535,11 @@ def load_indent(db, df, ctx, progress=None, replace=True):
         _replace_dates(db, FactIndent, FactIndent.indent_date, dates)
 
     frq, pod_c = _col(df, "final received"), _col(df, "po date")
+    ref_c = _col(df, "po reference")
     out = pd.DataFrame({
         "indent_date": dt.dt.date,
         "po_date": v_date(df[pod_c]).dt.date if pod_c else None,
+        "po_reference": v_str(df[ref_c]) if ref_c else "",
         "brand": v_str(df[_col(df, "brand")]),
         "fsn": v_str(df[_col(df, "fsn")]),
         "po_qty": v_int(df[_col(df, "po qty")]),
@@ -548,7 +553,9 @@ def load_indent(db, df, ctx, progress=None, replace=True):
     # Counted as rows-with-data so a partially-closed loop across chunks
     # doesn't read as fully open.
     closed = int(df[frq].notna().sum()) if frq else 0
-    return n, 0, dates, {"indent_rows": len(df), "indent_closed": closed}
+    has_ref = bool(ref_c) and not out["po_reference"].eq("").all()
+    return n, 0, dates, {"indent_rows": len(df), "indent_closed": closed,
+                         "indent_has_ref": 1 if has_ref else 0}
 
 
 LOADERS = {
@@ -603,6 +610,9 @@ def summarise(ftype, stats, dates, loaded):
                 f"network and were excluded - Flipkart's export is national.")
     elif ftype == "wh_receiving":
         notes.append("Category casing normalised.")
+        if not stats.get("wh_has_ref"):
+            notes.append("No PO Reference in this file - vendor gap will be matched by "
+                         "brand + product over the date range, not by exact PO.")
     elif ftype == "rejects":
         n_corrupt = stats.get("n_corrupt", 0)
         if n_corrupt:
@@ -620,6 +630,9 @@ def summarise(ftype, stats, dates, loaded):
         if stats.get("indent_rows") and not stats.get("indent_closed"):
             notes.append("'Final Received Qty' is empty for every row - the indent "
                          "loop isn't being closed operationally.")
+        if not stats.get("indent_has_ref"):
+            notes.append("No PO Reference in this file - vendor gap will be matched by "
+                         "brand + product over the date range, not by exact PO.")
     return notes
 
 
