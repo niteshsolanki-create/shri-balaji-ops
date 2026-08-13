@@ -21,6 +21,7 @@
 
 <div class="tabs">
   <div class="tab active" data-view="dashboard">Dashboard</div>
+  <div class="tab" data-view="funnel">Cycle</div>
   <div class="tab" data-view="products">Products</div>
   <div class="tab" data-view="swaps">Route &amp; Swaps</div>
   <div class="tab" data-view="rejects">Rejects</div>
@@ -53,6 +54,7 @@
     <div class="filter-grid">
       <div class="field" style="margin:0"><label>From</label><input type="date" id="dateFrom"></div>
       <div class="field" style="margin:0"><label>To</label><input type="date" id="dateTo"></div>
+      <div class="field" style="margin:0"><label>Department</label><div class="ms" data-key="departments"></div></div>
       <div class="field" style="margin:0"><label>Category</label><div class="ms" data-key="categories"></div></div>
       <div class="field" style="margin:0"><label>Brand</label><div class="ms" data-key="brands"></div></div>
       <div class="field" style="margin:0"><label>Store</label><div class="ms" data-key="stores"></div></div>
@@ -154,6 +156,29 @@
   </div>
 </div>
 
+<!-- ============ FUNNEL / CYCLE ============ -->
+<div class="view" id="view-funnel">
+  <div class="panel">
+    <div class="panel-head">
+      <div>
+        <div class="panel-title">PO → vendor → warehouse → store</div>
+        <div class="panel-sub">Every stage on its own — not filtered through store receiving. A PO shows up
+          here the day it's raised, even before anything has been delivered, batched or received.
+          Three gaps, three different owners: <b>vendor gap</b> is what the supplier fell short on,
+          <b>fulfillment gap</b> is your own picking, <b>claimable gap</b> is what's actually
+          arguable with Flipkart.</div>
+      </div>
+      <div class="panel-actions">
+        <div class="seg" id="funnelGroupBy">
+          <button class="seg-btn active" data-v="brand">By brand</button>
+          <button class="seg-btn" data-v="fsn">By product</button>
+        </div>
+      </div>
+    </div>
+    <div class="tbl-wrap"><table id="funnelTbl"></table></div>
+  </div>
+</div>
+
 <!-- ============ VIEWS ============ -->
 <div class="view" id="view-views">
   <div class="panel">
@@ -186,6 +211,21 @@
         rejects, route, indent. Type is detected from the columns. Re-uploading a date replaces it rather
         than double-counting, so overlapping historical exports are safe.</div>
     </div></div>
+    <div class="tmpl-box">
+      <div class="tmpl-head">
+        <div>
+          <div class="tmpl-title">Blank templates</div>
+          <div class="tmpl-sub">Fill these instead of building sheets from scratch — the column
+            headers are what the app matches on, and FSN plus the store code are what link a PO
+            to what the store finally received.</div>
+        </div>
+        <div class="tmpl-actions">
+          <a class="btn sm" href="/api/templates.zip">Download all</a>
+          <button class="btn ghost sm" id="tmplToggle">Show list</button>
+        </div>
+      </div>
+      <div id="tmplList" class="tmpl-list" style="display:none"></div>
+    </div>
     <div class="drop" id="drop">
       <h3>Drop files here</h3>
       <p>.xlsx or .csv — several at once is fine</p>

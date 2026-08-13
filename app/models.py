@@ -24,6 +24,56 @@ Base = declarative_base()
 # Flipkart FSNs are prefixed by vertical, so the prefix is a reliable
 # fallback and means F&V is never silently dropped from analysis again.
 # --------------------------------------------------------------------------
+# --------------------------------------------------------------------------
+# DEPARTMENTS
+#
+# The three lines the business actually runs. Categories are how Flipkart
+# describes a product; departments are how you staff, source and route it.
+# A category belongs to exactly one department.
+#
+# Why the odd-looking members:
+#   Ready Mixes / Ready Meals sit with Dairy because they move on the same
+#   cold chain and the same nightly dispatch, not because they're dairy.
+#   Meat, Seafood, Staples, Flowers and Plants sit with F&V because that's
+#   the ambient/mixed vehicle they actually ride on.
+#
+# Departments are derived from category at query time, never stored on the
+# fact rows. That means changing this map takes effect immediately across
+# all history - no re-upload, no backfill, no stale rows disagreeing with
+# new ones.
+# --------------------------------------------------------------------------
+DEPARTMENTS = {
+    "Dairy": [
+        "Milk", "Curd & Yogurt", "Buttermilk & Lassi", "Paneer & Tofu",
+        "Sweets & Mithai", "Ready Mixes", "Ready Meals",
+    ],
+    "Egg & Bread": [
+        "Eggs", "Breads", "Bakery",
+    ],
+    "F&V": [
+        "Fruits & Vegetables", "Flowers", "Plants & Garden",
+        "Meat", "Seafood", "Staples", "Pickles & Chutneys",
+    ],
+}
+
+# category -> department
+CATEGORY_DEPARTMENT = {c: d for d, cats in DEPARTMENTS.items() for c in cats}
+
+# Anything whose category didn't resolve. Deliberately NOT folded into F&V:
+# an unmapped product is a data-quality problem, and quietly parking it in a
+# real department would inflate that department's numbers with rows nobody
+# has checked. Keeping it visible is what makes it get fixed.
+UNASSIGNED = "Unassigned"
+
+DEPARTMENT_ORDER = ["Dairy", "F&V", "Egg & Bread", UNASSIGNED]
+
+
+def department_of(category):
+    if not category:
+        return UNASSIGNED
+    return CATEGORY_DEPARTMENT.get(str(category).strip(), UNASSIGNED)
+
+
 FSN_PREFIX_CATEGORY = {
     "MLK": "Milk", "DRC": "Milk",
     "CUY": "Curd & Yogurt",

@@ -1,7 +1,7 @@
 /* Shri Balaji Ops - dashboard client */
 const S = {
   options: null,
-  filters: { date_from: null, date_to: null, categories: [], brands: [], stores: [], vehicles: [], reasons: [] },
+  filters: { date_from: null, date_to: null, departments: [], categories: [], brands: [], stores: [], vehicles: [], reasons: [] },
   widgets: ['headline', 'trend', 'stores', 'categories', 'products', 'swaps', 'rejects', 'quality'],
   data: {}, sort: {}
 };
@@ -38,6 +38,7 @@ $$('.tab').forEach(t => t.onclick = () => {
   if (t.dataset.view === 'team') loadUsers();
   if (t.dataset.view === 'alerts') loadAlertPreview();
   if (t.dataset.view === 'views') loadTemplates();
+  if (t.dataset.view === 'funnel') loadFunnel();
 });
 
 /* ---------------- multiselects ---------------- */
@@ -338,6 +339,99 @@ function renderQuality(rows) {
     : '<div class="empty">No issues found in the loaded data.</div>';
 }
 
+/* ---------- funnel / cycle ---------- */
+let funnelGroupBy = 'brand';
+
+$('#funnelGroupBy') && $('#funnelGroupBy').querySelectorAll('.seg-btn').forEach(b => {
+  b.onclick = () => {
+    $('#funnelGroupBy').querySelectorAll('.seg-btn').forEach(x => x.classList.remove('active'));
+    b.classList.add('active');
+    funnelGroupBy = b.dataset.v;
+    loadFunnel();
+  };
+});
+
+async function loadFunnel() {
+  $('#funnelTbl').innerHTML = '<div class="empty">Loading…</div>';
+  S.filters.date_from = $('#dateFrom').value || null;
+  S.filters.date_to = $('#dateTo').value || null;
+  const j = await (await fetch('/api/funnel', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ...S.filters, group_by: funnelGroupBy })
+  })).json();
+  renderFunnel(j.rows || [], funnelGroupBy);
+}
+
+function gapCell(val, base) {
+  if (!val) return `<span class="gap-ok">0</span>`;
+  const pct = base ? Math.round(100 * val / base) : 0;
+  return `<span class="gap-bad">${n(val)}${base ? ` <small>(${pct}%)</small>` : ''}</span>`;
+}
+
+function renderFunnel(rows, groupBy) {
+  const keyLbl = groupBy === 'fsn' ? 'FSN' : 'Brand';
+  if (!rows.length) {
+    $('#funnelTbl').innerHTML = '<div class="empty">No data for this filter — try widening the date range, '
+      + 'or check that Indent and Warehouse Inbound files have been uploaded.</div>';
+    return;
+  }
+  $('#funnelTbl').innerHTML = `
+    <thead><tr>
+      <th>${keyLbl}</th>${groupBy === 'fsn' ? '<th>Brand</th>' : ''}
+      <th class="num">PO raised</th><th class="num">Vendor delivered</th><th class="num">Vendor gap</th>
+      <th class="num">Store ordered</th><th class="num">Picked</th><th class="num">Fulfillment gap</th>
+      <th class="num">Store received</th><th class="num">Claimable gap</th>
+    </tr></thead>
+    <tbody>${rows.map(r => `
+      <tr>
+        <td class="name">${groupBy === 'fsn' ? r.fsn : r.brand}</td>
+        ${groupBy === 'fsn' ? `<td>${r.brand}</td>` : ''}
+        <td class="num">${n(r.indent_qty)}</td>
+        <td class="num">${n(r.inbound_received)}</td>
+        <td class="num">${gapCell(r.vendor_gap, r.indent_qty)}</td>
+        <td class="num">${n(r.store_ordered)}</td>
+        <td class="num">${n(r.picked)}</td>
+        <td class="num">${gapCell(r.fulfillment_gap, r.store_ordered)}</td>
+        <td class="num">${n(r.store_received)}</td>
+        <td class="num">${gapCell(r.claimable_gap, r.picked)}</td>
+      </tr>`).join('')}
+    </tbody>`;
+}
+
+/* ---------- upload templates ---------- */
+let uploadTmplLoaded = false;
+
+async function loadUploadTemplates() {
+  if (uploadTmplLoaded) return;
+  try {
+    const j = await (await fetch('/api/templates')).json();
+    $('#tmplList').innerHTML = (j.templates || []).map(t => `
+      <div class="tmpl-row">
+        <div class="tmpl-stage">${t.stage}</div>
+        <div class="tmpl-main">
+          <div class="tmpl-name">${t.label}</div>
+          <div class="tmpl-why">${t.why}</div>
+          <div class="tmpl-cols">${(t.headers || []).join('  ·  ')}</div>
+          ${(t.notes || []).map(n => `<div class="tmpl-note">${n}</div>`).join('')}
+        </div>
+        <div class="tmpl-dl"><a class="btn ghost sm" href="/api/template/${t.key}">CSV</a></div>
+      </div>`).join('');
+    uploadTmplLoaded = true;
+  } catch (e) {
+    $('#tmplList').innerHTML =
+      '<div class="tmpl-note">Could not load the list — the "Download all" zip still works.</div>';
+  }
+}
+
+$('#tmplToggle') && ($('#tmplToggle').onclick = async () => {
+  const box = $('#tmplList'), btn = $('#tmplToggle');
+  if (box.style.display !== 'none') {
+    box.style.display = 'none'; btn.textContent = 'Show list'; return;
+  }
+  await loadUploadTemplates();
+  box.style.display = ''; btn.textContent = 'Hide list';
+});
+
 async function loadUploads() {
   const rows = await (await fetch('/api/uploads')).json();
   $('#uploadTbl').innerHTML = rows.length ? `
@@ -381,7 +475,7 @@ async function loadTemplates() {
 
   $('#tmplList').querySelectorAll('[data-load]').forEach(b => b.onclick = () => {
     const t = rows.find(x => x.id == b.dataset.load);
-    Object.assign(S.filters, { categories: [], brands: [], stores: [], vehicles: [], reasons: [] }, t.config.filters);
+    Object.assign(S.filters, { departments: [], categories: [], brands: [], stores: [], vehicles: [], reasons: [] }, t.config.filters);
     S.widgets = t.config.widgets.length ? t.config.widgets : S.widgets;
     $('#dateFrom').value = S.filters.date_from || '';
     $('#dateTo').value = S.filters.date_to || '';

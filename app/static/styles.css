@@ -88,6 +88,13 @@ input:focus,select:focus{outline:none;border-color:var(--cold)}
 .panel-head{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:14px;flex-wrap:wrap}
 .panel-title{font-family:'Space Grotesk';font-size:14px;font-weight:600}
 .panel-sub{font-size:11.5px;color:var(--muted);margin-top:2px;line-height:1.5;max-width:640px}
+.panel-actions{flex-shrink:0}
+.seg{display:inline-flex;border:1px solid var(--border);border-radius:8px;overflow:hidden}
+.seg-btn{background:var(--panel);border:none;color:var(--muted);font-size:11.5px;font-weight:600;padding:7px 13px;cursor:pointer;font-family:inherit}
+.seg-btn+.seg-btn{border-left:1px solid var(--border)}
+.seg-btn.active{background:var(--raised);color:var(--text)}
+.gap-bad{color:var(--bad)}
+.gap-ok{color:var(--muted)}
 .grid2{display:grid;grid-template-columns:1.55fr 1fr;gap:16px}
 @media(max-width:1040px){.grid2{grid-template-columns:1fr}.kpis{grid-template-columns:1fr 1fr}}
 @media(max-width:620px){.kpis{grid-template-columns:1fr}}
@@ -111,6 +118,7 @@ th:hover{color:var(--text)}
 th.no-sort{cursor:default}
 td{padding:9px 10px 9px 0;border-bottom:1px solid rgba(42,51,61,.55);font-family:'IBM Plex Mono';vertical-align:middle}
 td.name{font-family:Inter}
+th.num,td.num{text-align:right}
 tr:hover td{background:rgba(38,49,59,.35)}
 .tbl-wrap{overflow-x:auto;max-height:520px;overflow-y:auto}
 .heat{width:66px;height:6px;background:var(--raised);border-radius:4px;overflow:hidden;display:inline-block;vertical-align:middle;margin-right:8px}
@@ -131,6 +139,25 @@ tr:hover td{background:rgba(38,49,59,.35)}
 
 /* upload */
 .drop{border:1.5px dashed var(--border);border-radius:12px;padding:38px 20px;text-align:center;background:var(--panel);transition:.15s}
+
+/* upload templates */
+.tmpl-box{border:1px solid var(--border);border-radius:12px;background:var(--panel);padding:14px 16px;margin-bottom:14px}
+.tmpl-head{display:flex;justify-content:space-between;align-items:flex-start;gap:16px}
+.tmpl-title{font-size:13px;font-weight:600;margin-bottom:4px}
+.tmpl-sub{font-size:11.5px;color:var(--muted);line-height:1.6;max-width:70ch}
+.tmpl-actions{display:flex;gap:8px;flex-shrink:0}
+.tmpl-actions a.btn{text-decoration:none;display:inline-block}
+.tmpl-list{margin-top:14px;border-top:1px solid var(--border);padding-top:4px}
+.tmpl-row{display:flex;align-items:flex-start;gap:12px;padding:11px 0;border-bottom:1px solid var(--border)}
+.tmpl-row:last-child{border-bottom:none}
+.tmpl-stage{font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:var(--muted);background:var(--raised);border:1px solid var(--border);border-radius:5px;padding:3px 7px;white-space:nowrap;flex-shrink:0;min-width:96px;text-align:center}
+.tmpl-main{flex:1;min-width:0}
+.tmpl-name{font-size:12.5px;font-weight:600;margin-bottom:3px}
+.tmpl-why{font-size:11.5px;color:var(--muted);line-height:1.55}
+.tmpl-note{font-size:11px;color:var(--muted);line-height:1.55;margin-top:5px;padding-left:11px;border-left:1px solid var(--border)}
+.tmpl-cols{font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:var(--cold-dim);margin-top:5px;word-break:break-word;line-height:1.6}
+.tmpl-dl{flex-shrink:0}
+.tmpl-dl a{text-decoration:none;display:inline-block}
 .drop.over{border-color:var(--cold);background:var(--raised)}
 .drop h3{font-size:15px;margin-bottom:6px}
 .drop p{color:var(--muted);font-size:12.5px;margin-bottom:16px}

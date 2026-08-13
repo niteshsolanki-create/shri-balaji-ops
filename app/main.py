@@ -1,6 +1,8 @@
 """Shri Balaji Ops - supply-chain analytics service."""
 import os
+import io
 import json
+import zipfile
 import tempfile
 import hashlib
 import secrets
@@ -10,7 +12,7 @@ from email.message import EmailMessage
 from pathlib import Path
 
 from fastapi import FastAPI, Request, UploadFile, File, Form, HTTPException, Depends
-from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
@@ -18,6 +20,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from .models import (SessionLocal, init_db, User, DashboardTemplate, UploadLog,
                      AlertRule, AlertLog, DimStore)
 from .ingest import ingest_path, ingest_file
+from .upload_templates import TEMPLATES, ORDER, template_csv, template_index
 from . import analytics as A
 
 BASE = Path(__file__).parent
@@ -143,6 +146,7 @@ def parse_filters(payload: dict):
             return None
 
     return {"date_from": dt("date_from"), "date_to": dt("date_to"),
+            "departments": lst("departments"),
             "categories": lst("categories"), "brands": lst("brands"),
             "stores": lst("stores"), "vehicles": lst("vehicles"),
             "reasons": lst("reasons")}
@@ -153,12 +157,19 @@ def api_options(user=Depends(current_user), db=Depends(get_db)):
     return A.filter_options(db)
 
 
+@app.post("/api/funnel")
+def api_funnel(payload: dict, user=Depends(current_user), db=Depends(get_db)):
+    f = parse_filters(payload)
+    group_by = "fsn" if payload.get("group_by") == "fsn" else "brand"
+    return {"rows": A.stage_funnel(db, f, group_by=group_by), "group_by": group_by}
+
+
 @app.post("/api/dashboard")
 def api_dashboard(payload: dict, user=Depends(current_user), db=Depends(get_db)):
     f = parse_filters(payload)
     want = set(payload.get("widgets") or
-               ["headline", "trend", "stores", "categories", "products",
-                "swaps", "rejects", "quality"])
+               ["headline", "trend", "stores", "departments", "categories",
+                "products", "swaps", "rejects", "quality"])
     out = {"filters_applied": {k: (str(v) if isinstance(v, date) else v)
                                for k, v in f.items() if v}}
     if "headline" in want:
@@ -167,6 +178,8 @@ def api_dashboard(payload: dict, user=Depends(current_user), db=Depends(get_db))
         out["trend"] = A.daily_trend(db, f)
     if "stores" in want:
         out["stores"] = A.store_ranking(db, f)
+    if "departments" in want:
+        out["departments"] = A.department_breakdown(db, f)
     if "categories" in want:
         out["categories"] = A.category_breakdown(db, f)
     if "products" in want:
@@ -178,6 +191,87 @@ def api_dashboard(payload: dict, user=Depends(current_user), db=Depends(get_db))
     if "quality" in want:
         out["quality"] = A.data_quality(db, f)
     return out
+
+
+# ----------------------------- templates ----------------------------------
+@app.get("/api/templates")
+async def api_templates(user=Depends(current_user)):
+    """Metadata for the template list in the Upload tab."""
+    return {"templates": template_index()}
+
+
+@app.get("/api/template/{key}")
+async def api_template(key: str, user=Depends(current_user)):
+    """Download one blank template, header row plus a filled example row."""
+    if key not in TEMPLATES:
+        raise HTTPException(404, "No such template")
+    body = template_csv(key)
+    return Response(
+        content=body, media_type="text/csv",
+        headers={"Content-Disposition":
+                 f'attachment; filename="{TEMPLATES[key]["filename"]}"'})
+
+
+@app.get("/api/templates.zip")
+async def api_templates_zip(user=Depends(current_user)):
+    """
+    All templates in one zip, numbered in the order stock physically moves,
+    so the filenames themselves document the cycle.
+    """
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        for i, key in enumerate(ORDER, start=1):
+            z.writestr(f"{i}_{TEMPLATES[key]['filename']}", template_csv(key))
+        z.writestr("READ_ME_FIRST.txt", _template_readme())
+    buf.seek(0)
+    return Response(
+        content=buf.read(), media_type="application/zip",
+        headers={"Content-Disposition":
+                 'attachment; filename="shri-balaji-upload-templates.zip"'})
+
+
+def _template_readme():
+    lines = [
+        "SHRI BALAJI OPS - UPLOAD TEMPLATES",
+        "=" * 60, "",
+        "Fill these, don't rename the column headers. The app detects the",
+        "file type from the headers, so changing them breaks the import.",
+        "",
+        "THE TWO RULES THAT MAKE LINKING WORK",
+        "-" * 60,
+        "1. FSN is the join key. It connects a PO to an inbound delivery to",
+        "   a pick to a store GRN. A row without FSN loads, but cannot be",
+        "   traced through the cycle.",
+        "2. Store ID must be the facility code (gur_106_wh_hl_01), never the",
+        "   store's display name. Names vary between exports; codes don't.",
+        "",
+        "ORDER OF UPLOAD",
+        "-" * 60,
+        "Upload the two masters first (1 and 2). They are what the fact",
+        "files resolve store names and categories against. After that the",
+        "order doesn't matter.",
+        "",
+        "THE CYCLE",
+        "-" * 60,
+    ]
+    for i, key in enumerate(ORDER, start=1):
+        t = TEMPLATES[key]
+        lines.append(f"{i}. {t['label']}  [{t['stage']}]")
+        lines.append(f"   {t['why']}")
+        for nt in t["notes"]:
+            lines.append(f"   - {nt}")
+        lines.append("")
+    lines += [
+        "EXCEL WARNING",
+        "-" * 60,
+        "Format every quantity column as Number before typing into it.",
+        "Excel silently converts 5 into 05-Jan-1900 in a date-formatted",
+        "cell. The app recovers these, but it's better not to create them.",
+        "",
+        "The example row in each file is there to show the format. Delete",
+        "it before uploading real data.",
+    ]
+    return "\r\n".join(lines) + "\r\n"
 
 
 # ----------------------------- upload -------------------------------------
