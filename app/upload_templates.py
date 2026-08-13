@@ -25,11 +25,15 @@ TEMPLATES = {
         "stage": "1. PO raised",
         "filename": "INDENT_template.csv",
         "why": "The start of the cycle — what you asked the vendor for.",
-        "headers": ["Indent_Date", "PO Date", "Brand", "FSN", "PO Qty",
-                    "Vertical", "Title", "Final Received Qty"],
-        "example": ["2026-08-01", "2026-08-01", "Amul", "MLK000000001XYZ",
-                    "1000", "Dairy", "Amul Gold Milk 500ml", "800"],
+        "headers": ["Indent_Date", "PO Date", "PO Reference", "Brand", "FSN",
+                    "PO Qty", "Vertical", "Title", "Final Received Qty"],
+        "example": ["2026-08-01", "2026-08-01", "AMUL-PO-0142", "Amul",
+                    "MLK000000001XYZ", "1000", "Dairy", "Amul Gold Milk 500ml", "800"],
         "notes": [
+            "PO Reference is a number YOU make up when raising the PO — write anything unique, "
+            "e.g. AMUL-PO-0142. Write the exact same value on the Warehouse Inbound file when "
+            "that delivery arrives, and the app matches this exact PO to its exact delivery "
+            "instead of just totalling the brand for the date range.",
             "Final Received Qty closes the loop — fill it once the vendor has delivered.",
             "Leave it blank only if the delivery hasn't happened yet.",
         ],
@@ -39,12 +43,15 @@ TEMPLATES = {
         "stage": "2. Stock arrives at warehouse",
         "filename": "WH_RECEIVING_template.csv",
         "why": "What Amul / Mother Dairy / Parag actually delivered to you.",
-        "headers": ["Date", "EAN", "FSN", "Product", "Brand", "Category",
-                    "PO Qty", "Received Quantity", "Expiry Date", "Short Qty"],
-        "example": ["2026-08-01", "8901030123456", "MLK000000001XYZ",
+        "headers": ["Date", "EAN", "PO Reference", "FSN", "Product", "Brand",
+                    "Category", "PO Qty", "Received Quantity", "Expiry Date", "Short Qty"],
+        "example": ["2026-08-01", "8901030123456", "AMUL-PO-0142", "MLK000000001XYZ",
                     "Amul Gold Milk 500ml", "Amul", "Dairy", "1000", "800",
                     "2026-08-10", "200"],
         "notes": [
+            "PO Reference must match the value written on the Indent file for this same PO — "
+            "that match is what lets the Cycle tab trace one specific PO precisely, rather "
+            "than adding up everything for that brand in the date range.",
             "This is the file that tells you a shortage was the vendor's, not your picking team's.",
             "Without it, an inbound shortage looks identical to a picking error.",
         ],
