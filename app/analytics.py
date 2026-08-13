@@ -276,6 +276,69 @@ ZERO_FUNNEL = {"indent_qty": 0, "inbound_received": 0, "store_ordered": 0,
               "picked": 0, "store_received": 0, "damaged": 0}
 
 
+def po_trace(db, f):
+    """
+    Exact PO-level match between what you ordered and what arrived, using
+    the PO Reference written on both the Indent and Warehouse Inbound
+    files - this is the precise version of the vendor gap that stage_funnel
+    can only show as a brand+product total over a date range.
+
+    Keyed by (reference, fsn) when a reference is present, so one PO
+    covering several product lines still traces each line separately.
+    A row with NO reference on either side is grouped under "No reference"
+    by (brand, fsn) instead - the old aggregate behaviour - and marked
+    matched=False. That row is never silently merged into a referenced
+    PO's numbers: a blank key staying separate is what keeps the fallback
+    honest rather than misleading.
+    """
+    def rows(model, date_col, sums):
+        q = db.query(model.po_reference.label("ref"), model.brand.label("brand"),
+                     model.fsn.label("fsn"),
+                     *[func.sum(col).label(k) for k, col in sums.items()])
+        if f.get("date_from"):
+            q = q.filter(date_col >= f["date_from"])
+        if f.get("date_to"):
+            q = q.filter(date_col <= f["date_to"])
+        if f.get("brands"):
+            q = q.filter(model.brand.in_(f["brands"]))
+        return q.group_by(model.po_reference, model.brand, model.fsn).all()
+
+    ind = rows(FactIndent, FactIndent.indent_date, {"indent_qty": FactIndent.po_qty})
+    wh = rows(FactWarehouseReceiving, FactWarehouseReceiving.date,
+             {"inbound_received": FactWarehouseReceiving.received_qty})
+
+    def key_of(r):
+        ref = (r.ref or "").strip()
+        return (ref, r.fsn or "Unknown") if ref else (None, r.brand or "Unknown", r.fsn or "Unknown")
+
+    merged = {}
+    for r in ind:
+        k = key_of(r)
+        m = merged.setdefault(k, {"indent_qty": 0, "inbound_received": 0, "brand": r.brand})
+        m["indent_qty"] += int(r.indent_qty or 0)
+        m["brand"] = m["brand"] or r.brand
+    for r in wh:
+        k = key_of(r)
+        m = merged.setdefault(k, {"indent_qty": 0, "inbound_received": 0, "brand": r.brand})
+        m["inbound_received"] += int(r.inbound_received or 0)
+        m["brand"] = m["brand"] or r.brand
+
+    out = []
+    for k, vals in merged.items():
+        matched = k[0] is not None
+        fsn = k[1] if matched else k[2]
+        out.append({
+            "po_reference": k[0] if matched else "No reference",
+            "matched": matched,
+            "brand": vals["brand"] or "Unknown", "fsn": fsn,
+            "indent_qty": vals["indent_qty"],
+            "inbound_received": vals["inbound_received"],
+            "vendor_gap": max(vals["indent_qty"] - vals["inbound_received"], 0),
+        })
+    # Referenced (precise) rows first, worst gap first within each group.
+    return sorted(out, key=lambda r: (not r["matched"], -r["vendor_gap"]))
+
+
 def stage_funnel(db, f, group_by="brand"):
     """
     The full cycle, independent stage by stage: PO raised -> vendor
