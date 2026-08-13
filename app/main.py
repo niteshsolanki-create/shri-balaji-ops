@@ -164,6 +164,12 @@ def api_funnel(payload: dict, user=Depends(current_user), db=Depends(get_db)):
     return {"rows": A.stage_funnel(db, f, group_by=group_by), "group_by": group_by}
 
 
+@app.post("/api/po-trace")
+def api_po_trace(payload: dict, user=Depends(current_user), db=Depends(get_db)):
+    f = parse_filters(payload)
+    return {"rows": A.po_trace(db, f)}
+
+
 @app.post("/api/dashboard")
 def api_dashboard(payload: dict, user=Depends(current_user), db=Depends(get_db)):
     f = parse_filters(payload)
