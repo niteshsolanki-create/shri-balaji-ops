@@ -65,7 +65,6 @@ SIGNATURES = {
                  "total picked qty"},
     "store_receiving": {"warehouse id", "invoice id", "fsn",
                         "expected quantity", "received quantity"},
-    "wh_receiving": {"fsn", "product", "brand", "category"},
     "rejects": {"fsn", "product", "qty", "reason"},
     "store_master": {"warehouse name", "facility site code / wh"},
     "product_master": {"brand", "category", "ean", "title", "mrp"},
@@ -430,32 +429,7 @@ def load_store_receiving(db, df, ctx, progress=None, replace=True):
                                "n_foreign": n_foreign}
 
 
-def load_wh_receiving(db, df, ctx, progress=None, replace=True):
-    dt = v_date(df[_col(df, "date")])
-    dates = _dates_of(dt)
-    if replace:
-        _replace_dates(db, FactWarehouseReceiving, FactWarehouseReceiving.date, dates)
 
-    exp_c, cat_c, sh_c = _col(df, "expiry"), _col(df, "category"), _col(df, "short")
-    ref_c = _col(df, "po reference")
-    fsn = v_str(df[_col(df, "fsn")])
-    out = pd.DataFrame({
-        "date": dt.dt.date,
-        "ean": v_str(df[_col(df, "ean")], maxlen=20),
-        "po_reference": v_str(df[ref_c]) if ref_c else "",
-        "fsn": fsn,
-        "product": v_str(df[_col(df, "product")]),
-        "brand": v_str(df[_col(df, "brand")]),
-        "category": df[cat_c].map(canon_category) if cat_c else v_category_from_fsn(fsn),
-        "po_qty": v_int(df[_col(df, "po qty")]),
-        "received_qty": v_int(df[_col(df, "received")]),
-        "expiry_date": v_date(df[exp_c]).dt.date if exp_c else None,
-        "short_qty": v_int(df[sh_c]) if sh_c else 0,
-    })
-    cols = list(out.columns)
-    n = copy_into(out, "fact_wh_receiving", cols, progress)
-    has_ref = bool(ref_c) and not out["po_reference"].eq("").all()
-    return n, 0, dates, {"wh_has_ref": 1 if has_ref else 0}
 
 
 def load_rejects(db, df, ctx, progress=None, replace=True):
@@ -563,7 +537,6 @@ LOADERS = {
     "product_master": load_product_master,
     "batching": load_batching,
     "store_receiving": load_store_receiving,
-    "wh_receiving": load_wh_receiving,
     "rejects": load_rejects,
     "route": load_route,
     "indent": load_indent,
@@ -575,9 +548,7 @@ DATE_SPEC = {
     "batching": (("cutoff",), FactDispatch, FactDispatch.dispatch_date),
     "store_receiving": (("invoice date",), FactStoreReceiving,
                         FactStoreReceiving.invoice_date),
-    "wh_receiving": (("date",), FactWarehouseReceiving,
-                     FactWarehouseReceiving.date),
-    "rejects": (("date",), FactReject, FactReject.date),
+        "rejects": (("date",), FactReject, FactReject.date),
     "route": (("date",), FactRoute, FactRoute.date),
     "indent": (("indent",), FactIndent, FactIndent.indent_date),
 }
@@ -608,11 +579,6 @@ def summarise(ftype, stats, dates, loaded):
             notes.append(
                 f"{n_foreign:,} rows belonged to darkstores outside your 48-store "
                 f"network and were excluded - Flipkart's export is national.")
-    elif ftype == "wh_receiving":
-        notes.append("Category casing normalised.")
-        if not stats.get("wh_has_ref"):
-            notes.append("No PO Reference in this file - vendor gap will be matched by "
-                         "brand + product over the date range, not by exact PO.")
     elif ftype == "rejects":
         n_corrupt = stats.get("n_corrupt", 0)
         if n_corrupt:
