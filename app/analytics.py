@@ -80,7 +80,14 @@ def _dept_filter(q, model, f):
     return q.filter(model.category.in_(cats))
 
 
-def _apply(q, model, f):
+def _apply(q, model, f, submitted_only=False):
+    """
+    submitted_only applies to store-receiving queries that compute a gap.
+    It drops GRNs the store hasn't submitted yet, which would otherwise
+    read as received=0 and look like a total loss.
+    """
+    if submitted_only and model is FactStoreReceiving:
+        q = _submitted_only(q, model)
     if f.get("date_from"):
         q = q.filter(model.invoice_date >= f["date_from"])
     if f.get("date_to"):
@@ -97,6 +104,44 @@ def _apply(q, model, f):
                .filter(FactRoute.vehicle_no.in_(f["vehicles"])))
         q = q.filter(model.warehouse_id.in_([r[0] for r in sub if r[0]]))
     return q
+
+
+# A GRN the store hasn't submitted yet reads as received_qty = 0. That is
+# not a loss - it is an absence of a count. Including these rows makes an
+# un-counted store look like a total write-off and inflates the claimable
+# gap, which is the one number that turns into a claim against Flipkart.
+# On 13-Aug a single such store moved the gap from 1.89% to 2.25%.
+PENDING_GRN_STATUSES = ("waiting", "pending", "in_progress", "in progress")
+
+
+def _submitted_only(q, model=FactStoreReceiving):
+    """Restrict to GRNs the store has actually completed."""
+    return q.filter(or_(model.status.is_(None),
+                        ~func.lower(func.trim(model.status)).in_(PENDING_GRN_STATUSES)))
+
+
+def pending_grns(db, f):
+    """
+    Rows excluded from the gap maths because the store hasn't submitted the
+    GRN. Surfaced rather than hidden: these are chase-the-store items, not
+    shrinkage, and they need to be visible or they'll never get closed.
+    """
+    rows = _apply(db.query(
+        FactStoreReceiving.warehouse_id,
+        func.count(FactStoreReceiving.id),
+        func.sum(FactStoreReceiving.expected_qty),
+        func.min(FactStoreReceiving.invoice_date),
+        func.max(FactStoreReceiving.invoice_date),
+    ), FactStoreReceiving, f).filter(
+        func.lower(func.trim(FactStoreReceiving.status)).in_(PENDING_GRN_STATUSES)
+    ).group_by(FactStoreReceiving.warehouse_id).all()
+
+    names = {s.warehouse_id: s.warehouse_name for s in db.query(DimStore).all()}
+    out = [{"warehouse_id": w, "store": names.get(w, w), "rows": int(n or 0),
+            "units_awaiting": int(u or 0),
+            "from": str(d1) if d1 else None, "to": str(d2) if d2 else None}
+           for w, n, u, d1, d2 in (rows or [])]
+    return sorted(out, key=lambda r: -r["units_awaiting"])
 
 
 def filter_options(db):
@@ -141,7 +186,7 @@ def headline(db, f):
         func.coalesce(func.sum(FactStoreReceiving.damaged_qty), 0),
         func.coalesce(func.sum(FactStoreReceiving.excess_qty), 0),
         func.coalesce(func.sum(FactStoreReceiving.scanning_issue_qty), 0),
-    ), FactStoreReceiving, f)
+    ), FactStoreReceiving, f, submitted_only=True)
     dispatched, received, damaged, excess, scan = q.first()
 
     gap = dispatched - received
@@ -180,7 +225,7 @@ def daily_trend(db, f):
         func.sum(FactStoreReceiving.expected_qty),
         func.sum(FactStoreReceiving.received_qty),
         func.sum(FactStoreReceiving.damaged_qty),
-    ), FactStoreReceiving, f).group_by(FactStoreReceiving.invoice_date) \
+    ), FactStoreReceiving, f, submitted_only=True).group_by(FactStoreReceiving.invoice_date) \
         .order_by(FactStoreReceiving.invoice_date)
 
     out = []
@@ -207,7 +252,7 @@ def store_ranking(db, f, flag_threshold=3.0, min_volume=100):
         func.sum(FactStoreReceiving.received_qty),
         func.sum(FactStoreReceiving.damaged_qty),
         func.sum(FactStoreReceiving.excess_qty),
-    ), FactStoreReceiving, f).group_by(FactStoreReceiving.warehouse_id).all()
+    ), FactStoreReceiving, f, submitted_only=True).group_by(FactStoreReceiving.warehouse_id).all()
 
     per_day = _apply(db.query(
         FactStoreReceiving.warehouse_id,
@@ -215,7 +260,7 @@ def store_ranking(db, f, flag_threshold=3.0, min_volume=100):
         func.sum(FactStoreReceiving.expected_qty),
         func.sum(FactStoreReceiving.received_qty),
         func.sum(FactStoreReceiving.damaged_qty),
-    ), FactStoreReceiving, f).group_by(FactStoreReceiving.warehouse_id,
+    ), FactStoreReceiving, f, submitted_only=True).group_by(FactStoreReceiving.warehouse_id,
                                        FactStoreReceiving.invoice_date).all()
 
     flags, days = {}, {}
@@ -246,7 +291,8 @@ def store_ranking(db, f, flag_threshold=3.0, min_volume=100):
     return sorted(out, key=lambda r: -r["gap_pct"])
 
 
-def _stage_rows(db, model, date_col, brand_col, fsn_col, dept_expr_, sums, f):
+def _stage_rows(db, model, date_col, brand_col, fsn_col, dept_expr_, sums, f,
+                submitted_only=False):
     """
     Sum a stage table grouped by (brand, fsn), filtered on that table's OWN
     date/brand/department columns - never store_receiving's. This is what
@@ -255,6 +301,8 @@ def _stage_rows(db, model, date_col, brand_col, fsn_col, dept_expr_, sums, f):
     """
     q = db.query(brand_col.label("brand"), fsn_col.label("fsn"),
                  *[func.sum(col).label(k) for k, col in sums.items()])
+    if submitted_only:
+        q = _submitted_only(q, model)
     if f.get("date_from"):
         q = q.filter(date_col >= f["date_from"])
     if f.get("date_to"):
@@ -305,9 +353,31 @@ def stage_funnel(db, f, group_by="brand"):
                            FactStoreReceiving.brand, FactStoreReceiving.fsn,
                            dept_expr(FactStoreReceiving),
                            {"store_received": FactStoreReceiving.received_qty,
-                            "damaged": FactStoreReceiving.damaged_qty}, f)
+                            "damaged": FactStoreReceiving.damaged_qty}, f,
+                           submitted_only=True)
 
     keys = set(indent) | set(batched) | set(received)
+
+    # FSN alone is unreadable - carry the product name through so the
+    # by-product view names what it's talking about. Taken from whichever
+    # stage has it; batching and GRN both carry a title.
+    titles = {}
+    for src, model, fsn_col, desc_col, cat_col in (
+        ("recv", FactStoreReceiving, FactStoreReceiving.fsn,
+         FactStoreReceiving.description, FactStoreReceiving.category),
+        ("disp", FactDispatch, FactDispatch.fsn,
+         FactDispatch.product_title, FactDispatch.category),
+    ):
+        try:
+            for fsn, desc, cat in db.query(
+                    fsn_col, func.max(desc_col), func.max(cat_col)
+            ).group_by(fsn_col).all():
+                if fsn and fsn not in titles:
+                    titles[fsn] = (desc or "", cat or "")
+        except Exception:
+            # A missing column on one stage must not take the whole view down.
+            pass
+
     fine = []
     for k in keys:
         row = dict(ZERO_FUNNEL)
@@ -315,12 +385,21 @@ def stage_funnel(db, f, group_by="brand"):
         row.update(batched.get(k, {}))
         row.update(received.get(k, {}))
         row["brand"], row["fsn"] = k
+        desc, cat = titles.get(row["fsn"], ("", ""))
+        row["description"], row["category"] = desc, cat
         fine.append(row)
 
     def with_gaps(row):
-        row["vendor_gap"] = max(row["indent_qty"] - row["inbound_received"], 0)
-        row["fulfillment_gap"] = max(row["store_ordered"] - row["picked"], 0)
-        row["claimable_gap"] = max(row["picked"] - row["store_received"] - row["damaged"], 0)
+        # A gap is only meaningful when BOTH sides of it have data. With no
+        # batching uploaded, picked is 0 and max(0 - received, 0) floors at
+        # zero - which renders identically to a clean day. None means "no
+        # data to compare", and the UI shows it as a dash, not a zero.
+        row["vendor_gap"] = (max(row["indent_qty"] - row["inbound_received"], 0)
+                             if row["indent_qty"] else None)
+        row["fulfillment_gap"] = (max(row["store_ordered"] - row["picked"], 0)
+                                  if row["store_ordered"] else None)
+        row["claimable_gap"] = (max(row["picked"] - row["store_received"] - row["damaged"], 0)
+                                if row["picked"] else None)
         return row
 
     if group_by == "fsn":
@@ -333,7 +412,8 @@ def stage_funnel(db, f, group_by="brand"):
                 a[k] += row[k]
         out = [with_gaps(a) for a in agg.values()]
 
-    return sorted(out, key=lambda r: -(r["indent_qty"] + r["store_ordered"]))
+    return sorted(out, key=lambda r: -(r["indent_qty"] + r["store_ordered"]
+                                       + r["store_received"]))
 
 
 def department_breakdown(db, f):
@@ -353,7 +433,7 @@ def department_breakdown(db, f):
         func.sum(FactStoreReceiving.damaged_qty),
         func.count(distinct(FactStoreReceiving.fsn)),
         func.count(distinct(FactStoreReceiving.warehouse_id)),
-    ), FactStoreReceiving, f).group_by("dept").all()
+    ), FactStoreReceiving, f, submitted_only=True).group_by("dept").all()
 
     # Picking side comes from the batching file, which is a different table
     # and a different stage - joined here only for display.
@@ -394,7 +474,7 @@ def category_breakdown(db, f):
         func.sum(FactStoreReceiving.expected_qty),
         func.sum(FactStoreReceiving.received_qty),
         func.sum(FactStoreReceiving.damaged_qty),
-    ), FactStoreReceiving, f).group_by(FactStoreReceiving.category).all()
+    ), FactStoreReceiving, f, submitted_only=True).group_by(FactStoreReceiving.category).all()
 
     out = []
     for cat, exp, rec, dmg in rows:
@@ -409,6 +489,18 @@ def category_breakdown(db, f):
 
 
 def product_detail(db, f, limit=200):
+    """
+    Per-product view across batching and GRN.
+
+    Two deliberate choices:
+    - Products with no gap are KEPT. Dropping them meant you could only ever
+      see problems, never confirm that the rest of the catalogue moved
+      cleanly, and a product that stopped appearing was indistinguishable
+      from one that stopped being ordered.
+    - "Picked" comes from the batching file, not the GRN's expected qty.
+      Those are different numbers: expected is what the store was told to
+      expect, picked is what your team actually put on the vehicle.
+    """
     rows = _apply(db.query(
         FactStoreReceiving.fsn,
         func.max(FactStoreReceiving.description),
@@ -417,17 +509,39 @@ def product_detail(db, f, limit=200):
         func.sum(FactStoreReceiving.expected_qty),
         func.sum(FactStoreReceiving.received_qty),
         func.sum(FactStoreReceiving.damaged_qty),
-    ), FactStoreReceiving, f).group_by(FactStoreReceiving.fsn).all()
+    ), FactStoreReceiving, f, submitted_only=True).group_by(FactStoreReceiving.fsn).all()
+
+    # Picking side lives in a different table on a different date column.
+    dq = db.query(FactDispatch.fsn,
+                  func.sum(FactDispatch.expected_qty),
+                  func.sum(FactDispatch.picked_qty))
+    if f.get("date_from"):
+        dq = dq.filter(FactDispatch.dispatch_date >= f["date_from"] - timedelta(days=1))
+    if f.get("date_to"):
+        dq = dq.filter(FactDispatch.dispatch_date <= f["date_to"])
+    dq = _dept_filter(dq, FactDispatch, f)
+    if f.get("categories"):
+        dq = dq.filter(FactDispatch.category.in_(f["categories"]))
+    if f.get("brands"):
+        dq = dq.filter(FactDispatch.brand.in_(f["brands"]))
+    if f.get("stores"):
+        dq = dq.filter(FactDispatch.warehouse_id.in_(f["stores"]))
+    pick = {fsn: (int(o or 0), int(p or 0))
+            for fsn, o, p in dq.group_by(FactDispatch.fsn).all()}
 
     out = []
     for fsn, desc, cat, nstores, exp, rec, dmg in rows:
         exp, rec, dmg = int(exp or 0), int(rec or 0), int(dmg or 0)
         claim = max(exp - rec - dmg, 0)
-        if claim <= 0:
-            continue
+        ordered, picked = pick.get(fsn, (0, 0))
         out.append({"fsn": fsn, "description": desc, "category": cat,
-                    "stores_affected": int(nstores), "dispatched": exp,
-                    "received": rec, "claimable_units": claim,
+                    "department": department_of(cat),
+                    "stores_affected": int(nstores),
+                    "ordered": ordered, "picked": picked,
+                    "fulfillment_gap": max(ordered - picked, 0),
+                    "has_batching": fsn in pick,
+                    "dispatched": exp,
+                    "received": rec, "damaged": dmg, "claimable_units": claim,
                     "gap_pct": round(100 * claim / exp, 2) if exp else 0})
     return sorted(out, key=lambda r: -r["claimable_units"])[:limit]
 
@@ -448,7 +562,7 @@ def swap_candidates(db, f):
         FactStoreReceiving.warehouse_id, FactStoreReceiving.description,
         FactStoreReceiving.expected_qty, FactStoreReceiving.received_qty,
         FactStoreReceiving.excess_qty,
-    ), FactStoreReceiving, f).all()
+    ), FactStoreReceiving, f, submitted_only=True).all()
 
     routes = {}
     for r in db.query(FactRoute).all():
