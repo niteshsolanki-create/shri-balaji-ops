@@ -38,24 +38,6 @@ TEMPLATES = {
             "Leave it blank only if the delivery hasn't happened yet.",
         ],
     },
-    "wh_receiving": {
-        "label": "Warehouse inbound",
-        "stage": "2. Stock arrives at warehouse",
-        "filename": "WH_RECEIVING_template.csv",
-        "why": "What Amul / Mother Dairy / Parag actually delivered to you.",
-        "headers": ["Date", "EAN", "PO Reference", "FSN", "Product", "Brand",
-                    "Category", "PO Qty", "Received Quantity", "Expiry Date", "Short Qty"],
-        "example": ["2026-08-01", "8901030123456", "AMUL-PO-0142", "MLK000000001XYZ",
-                    "Amul Gold Milk 500ml", "Amul", "Dairy", "1000", "800",
-                    "2026-08-10", "200"],
-        "notes": [
-            "PO Reference must match the value written on the Indent file for this same PO — "
-            "that match is what lets the Cycle tab trace one specific PO precisely, rather "
-            "than adding up everything for that brand in the date range.",
-            "This is the file that tells you a shortage was the vendor's, not your picking team's.",
-            "Without it, an inbound shortage looks identical to a picking error.",
-        ],
-    },
     "batching": {
         "label": "Batching / dispatch",
         "stage": "3. Picked and batched per store",
@@ -153,7 +135,7 @@ TEMPLATES = {
 
 # Order shown in the UI — follows the physical flow of stock, so the list
 # doubles as a description of the cycle.
-ORDER = ["store_master", "product_master", "indent", "wh_receiving",
+ORDER = ["store_master", "product_master", "indent",
          "batching", "route", "store_receiving", "rejects"]
 
 
