@@ -19,7 +19,7 @@ from datetime import date, timedelta
 from sqlalchemy import func, and_, or_, case, distinct
 
 from .models import (SessionLocal, FactStoreReceiving, FactDispatch, FactReject,
-                     FactRoute, FactWarehouseReceiving, FactIndent,
+                     FactRoute, FactIndent,
                      DimStore, DimProduct,
                      DEPARTMENTS, DEPARTMENT_ORDER, UNASSIGNED, department_of,
                      FSN_PREFIX_CATEGORY)
@@ -113,11 +113,9 @@ def filter_options(db):
     # cycle completes.
     cats = sorted(set(col(FactStoreReceiving, FactStoreReceiving.category))
                   | set(col(FactDispatch, FactDispatch.category))
-                  | set(col(FactWarehouseReceiving, FactWarehouseReceiving.category))
                   | set(col(FactReject, FactReject.category)))
     brands = sorted(set(col(FactStoreReceiving, FactStoreReceiving.brand))
                     | set(col(FactDispatch, FactDispatch.brand))
-                    | set(col(FactWarehouseReceiving, FactWarehouseReceiving.brand))
                     | set(col(FactIndent, FactIndent.brand)))
 
     present = {department_of(c) for c in cats}
@@ -276,83 +274,16 @@ ZERO_FUNNEL = {"indent_qty": 0, "inbound_received": 0, "store_ordered": 0,
               "picked": 0, "store_received": 0, "damaged": 0}
 
 
-def po_trace(db, f):
-    """
-    Exact PO-level match between what you ordered and what arrived, using
-    the PO Reference written on both the Indent and Warehouse Inbound
-    files - this is the precise version of the vendor gap that stage_funnel
-    can only show as a brand+product total over a date range.
-
-    Keyed by (reference, fsn) when a reference is present, so one PO
-    covering several product lines still traces each line separately.
-    A row with NO reference on either side is grouped under "No reference"
-    by (brand, fsn) instead - the old aggregate behaviour - and marked
-    matched=False. That row is never silently merged into a referenced
-    PO's numbers: a blank key staying separate is what keeps the fallback
-    honest rather than misleading.
-    """
-    def rows(model, date_col, sums):
-        q = db.query(model.po_reference.label("ref"), model.brand.label("brand"),
-                     model.fsn.label("fsn"),
-                     *[func.sum(col).label(k) for k, col in sums.items()])
-        if f.get("date_from"):
-            q = q.filter(date_col >= f["date_from"])
-        if f.get("date_to"):
-            q = q.filter(date_col <= f["date_to"])
-        if f.get("brands"):
-            q = q.filter(model.brand.in_(f["brands"]))
-        return q.group_by(model.po_reference, model.brand, model.fsn).all()
-
-    ind = rows(FactIndent, FactIndent.indent_date, {"indent_qty": FactIndent.po_qty})
-    wh = rows(FactWarehouseReceiving, FactWarehouseReceiving.date,
-             {"inbound_received": FactWarehouseReceiving.received_qty})
-
-    def key_of(r):
-        ref = (r.ref or "").strip()
-        return (ref, r.fsn or "Unknown") if ref else (None, r.brand or "Unknown", r.fsn or "Unknown")
-
-    merged = {}
-    for r in ind:
-        k = key_of(r)
-        m = merged.setdefault(k, {"indent_qty": 0, "inbound_received": 0, "brand": r.brand})
-        m["indent_qty"] += int(r.indent_qty or 0)
-        m["brand"] = m["brand"] or r.brand
-    for r in wh:
-        k = key_of(r)
-        m = merged.setdefault(k, {"indent_qty": 0, "inbound_received": 0, "brand": r.brand})
-        m["inbound_received"] += int(r.inbound_received or 0)
-        m["brand"] = m["brand"] or r.brand
-
-    out = []
-    for k, vals in merged.items():
-        matched = k[0] is not None
-        fsn = k[1] if matched else k[2]
-        out.append({
-            "po_reference": k[0] if matched else "No reference",
-            "matched": matched,
-            "brand": vals["brand"] or "Unknown", "fsn": fsn,
-            "indent_qty": vals["indent_qty"],
-            "inbound_received": vals["inbound_received"],
-            "vendor_gap": max(vals["indent_qty"] - vals["inbound_received"], 0),
-        })
-    # Referenced (precise) rows first, worst gap first within each group.
-    return sorted(out, key=lambda r: (not r["matched"], -r["vendor_gap"]))
 
 
 def stage_funnel(db, f, group_by="brand"):
     """
-    The full cycle, independent stage by stage: PO raised -> vendor
-    delivered -> picked/batched -> store received.
+    The cycle: PO raised -> picked/batched -> store received.
 
-    Each stage is queried against its OWN table with its OWN date and
-    department columns, then merged in Python on (brand, fsn) - never
-    filtered through store_receiving. That is what makes this different
-    from every other view in the app: a PO can show up here the day it's
-    raised, days before any store has received anything, because it was
-    never required to join against store_receiving to be visible.
+    Vendor delivery is tracked in Indent's "Final Received Qty", so you
+    don't need a separate warehouse receiving stage.
 
-    Three gaps, three different owners - do not blend them:
-      vendor_gap       = indent_qty - inbound_received   (the vendor's problem)
+    Two gaps, two different owners - do not blend them:
       fulfillment_gap  = store_ordered - picked           (your picking, NOT claimable)
       claimable_gap    = picked - store_received - damaged (transit loss, claimable)
 
@@ -363,11 +294,8 @@ def stage_funnel(db, f, group_by="brand"):
     indent = _stage_rows(db, FactIndent, FactIndent.indent_date,
                          FactIndent.brand, FactIndent.fsn,
                          fsn_dept_expr(FactIndent.fsn),
-                         {"indent_qty": FactIndent.po_qty}, f)
-    inbound = _stage_rows(db, FactWarehouseReceiving, FactWarehouseReceiving.date,
-                          FactWarehouseReceiving.brand, FactWarehouseReceiving.fsn,
-                          dept_expr(FactWarehouseReceiving),
-                          {"inbound_received": FactWarehouseReceiving.received_qty}, f)
+                         {"indent_qty": FactIndent.po_qty,
+                          "inbound_received": FactIndent.final_received_qty}, f)
     batched = _stage_rows(db, FactDispatch, FactDispatch.dispatch_date,
                           FactDispatch.brand, FactDispatch.fsn,
                           dept_expr(FactDispatch),
@@ -379,12 +307,11 @@ def stage_funnel(db, f, group_by="brand"):
                            {"store_received": FactStoreReceiving.received_qty,
                             "damaged": FactStoreReceiving.damaged_qty}, f)
 
-    keys = set(indent) | set(inbound) | set(batched) | set(received)
+    keys = set(indent) | set(batched) | set(received)
     fine = []
     for k in keys:
         row = dict(ZERO_FUNNEL)
         row.update(indent.get(k, {}))
-        row.update(inbound.get(k, {}))
         row.update(batched.get(k, {}))
         row.update(received.get(k, {}))
         row["brand"], row["fsn"] = k
