@@ -50,7 +50,7 @@ from sqlalchemy import delete
 from .models import (SessionLocal, engine, DimStore, DimProduct, FactDispatch,
                      FactStoreReceiving, FactReject,
                      FactRoute, FactIndent, UploadLog,
-                     canon_category, FSN_PREFIX_CATEGORY)
+                     canon_category, canon_brand, FSN_PREFIX_CATEGORY)
 
 # Rows held in memory at once. Lower this if the container is very small;
 # raise it for faster imports on a bigger box. Memory scales with this
@@ -334,7 +334,7 @@ def load_product_master(db, df, ctx, progress=None, replace=True):
     out = pd.DataFrame({
         "fsn": v_str(df[_col(df, "fsn")]),
         "ean": v_str(df[_col(df, "ean")], maxlen=20),
-        "brand": v_str(df[_col(df, "brand")]),
+        "brand": v_str(df[_col(df, "brand")]).map(canon_brand),
         "category": df[_col(df, "category")].map(canon_category),
         "title": v_str(df[_col(df, "title")]),
         "mrp": pd.to_numeric(df[_col(df, "mrp")], errors="coerce"),
@@ -457,7 +457,7 @@ def load_rejects(db, df, ctx, progress=None, replace=True):
         "ean": v_str(df[_col(df, "ean")], maxlen=20),
         "fsn": fsn,
         "product": v_str(df[_col(df, "product")]),
-        "brand": v_str(df[_col(df, "brand")]),
+        "brand": v_str(df[_col(df, "brand")]).map(canon_brand),
         "category": df[cat_c].map(canon_category) if cat_c else v_category_from_fsn(fsn),
         "qty": qty,
         "qty_was_corrupted": corrupted,
@@ -519,7 +519,7 @@ def load_indent(db, df, ctx, progress=None, replace=True):
         "indent_date": dt.dt.date,
         "po_date": v_date(df[pod_c]).dt.date if pod_c else None,
         "po_reference": v_str(df[ref_c]) if ref_c else "",
-        "brand": v_str(df[_col(df, "brand")]),
+        "brand": v_str(df[_col(df, "brand")]).map(canon_brand),
         "fsn": v_str(df[_col(df, "fsn")]),
         "po_qty": v_int(df[_col(df, "po qty")]),
         "vertical": v_str(df[_col(df, "vertical")]),
