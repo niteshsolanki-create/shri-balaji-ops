@@ -171,6 +171,7 @@ function renderAll() {
   if (d.swaps) renderSwaps(d.swaps);
   if (d.rejects) renderRejects(d.rejects);
   if (d.quality) renderQuality(d.quality);
+  renderPendingGrns(d.pending_grns);
 }
 
 /* ---------------- renderers ---------------- */
@@ -340,6 +341,32 @@ function renderQuality(rows) {
     : '<div class="empty">No issues found in the loaded data.</div>';
 }
 
+function renderPendingGrns(rows) {
+  const el = $('#pendingGrns');
+  if (!el) return;
+  if (!rows || !rows.length) {
+    el.innerHTML = '<div class="empty">Every store has submitted its GRN for this period.</div>';
+    return;
+  }
+  const units = rows.reduce((a, r) => a + r.units_awaiting, 0);
+  el.innerHTML = `
+    <p class="panel-sub" style="margin-bottom:10px">
+      ${n(units)} units across ${rows.length} store(s) are sitting in GRNs the store hasn't
+      submitted. These are <b>excluded from all gap figures</b> — they aren't losses, they're
+      uncounted. Chase the store rather than filing a claim.</p>
+    <table>
+      <thead><tr><th>Store</th><th class="num">Units awaiting</th><th class="num">Lines</th><th>Dates</th></tr></thead>
+      <tbody>${rows.map(r => `
+        <tr>
+          <td class="name">${r.store}<div class="sub-fsn">${r.warehouse_id}</div></td>
+          <td class="num">${n(r.units_awaiting)}</td>
+          <td class="num">${n(r.rows)}</td>
+          <td>${r.from === r.to ? r.from : `${r.from} → ${r.to}`}</td>
+        </tr>`).join('')}
+      </tbody>
+    </table>`;
+}
+
 /* ---------- funnel / cycle ---------- */
 let funnelGroupBy = 'brand';
 
@@ -364,29 +391,36 @@ async function loadFunnel() {
 }
 
 function gapCell(val, base) {
+  // null means the upstream stage has no data for this filter, so the gap
+  // is unknowable - showing 0 there would read as a clean result.
+  if (val === null || val === undefined) {
+    return `<span class="gap-nodata" title="No upstream data for this filter — upload the earlier stage's file">—</span>`;
+  }
   if (!val) return `<span class="gap-ok">0</span>`;
   const pct = base ? Math.round(100 * val / base) : 0;
   return `<span class="gap-bad">${n(val)}${base ? ` <small>(${pct}%)</small>` : ''}</span>`;
 }
 
 function renderCycleFunnel(rows, groupBy) {
-  const keyLbl = groupBy === 'fsn' ? 'FSN' : 'Brand';
   if (!rows.length) {
     $('#funnelTbl').innerHTML = '<div class="empty">No data for this filter — try widening the date range, '
-      + 'or check that Indent and Warehouse Inbound files have been uploaded.</div>';
+      + 'or check that the Batching and Store Receiving files have been uploaded. '
+      + 'PO and vendor columns stay empty until an Indent file is uploaded.</div>';
     return;
   }
+  const byFsn = groupBy === 'fsn';
   $('#funnelTbl').innerHTML = `
     <thead><tr>
-      <th>${keyLbl}</th>${groupBy === 'fsn' ? '<th>Brand</th>' : ''}
+      ${byFsn ? '<th>Product</th><th>Brand</th>' : '<th>Brand</th>'}
       <th class="num">PO raised</th><th class="num">Vendor delivered</th><th class="num">Vendor gap</th>
       <th class="num">Store ordered</th><th class="num">Picked</th><th class="num">Fulfillment gap</th>
       <th class="num">Store received</th><th class="num">Claimable gap</th>
     </tr></thead>
     <tbody>${rows.map(r => `
       <tr>
-        <td class="name">${groupBy === 'fsn' ? r.fsn : r.brand}</td>
-        ${groupBy === 'fsn' ? `<td>${r.brand}</td>` : ''}
+        ${byFsn
+          ? `<td class="name">${r.description || r.fsn}<div class="sub-fsn">${r.fsn}</div></td><td>${r.brand}</td>`
+          : `<td class="name">${r.brand}</td>`}
         <td class="num">${n(r.indent_qty)}</td>
         <td class="num">${n(r.inbound_received)}</td>
         <td class="num">${gapCell(r.vendor_gap, r.indent_qty)}</td>
