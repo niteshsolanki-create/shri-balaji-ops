@@ -111,6 +111,7 @@ input:focus,select:focus{outline:none;border-color:var(--cold)}
 .floss{font-size:10.5px;font-family:'IBM Plex Mono';margin-top:7px;padding:2px 8px;border-radius:20px;display:inline-block}
 .floss.big{background:rgba(217,102,107,.15);color:var(--bad)}
 .floss.small{background:rgba(232,162,61,.15);color:var(--alert)}
+.fnote{font-size:10px;color:var(--muted);margin-top:6px;line-height:1.4}
 .farrow{color:var(--muted);padding:14px 3px 0;font-size:15px}
 
 /* tables */
