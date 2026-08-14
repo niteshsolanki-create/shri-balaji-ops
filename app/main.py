@@ -190,6 +190,7 @@ def api_dashboard(payload: dict, user=Depends(current_user), db=Depends(get_db))
         out["rejects"] = A.reject_breakdown(db, f)
     if "quality" in want:
         out["quality"] = A.data_quality(db, f)
+        out["pending_grns"] = A.pending_grns(db, f)
     return out
 
 
