@@ -1,191 +1,277 @@
-@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Shri Balaji Ops</title>
+<link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
 
-:root{
-  --void:#12161B; --panel:#1A2129; --raised:#212A33; --hover:#26313B;
-  --cold:#4FB4DB; --cold-dim:#2E5C6E;
-  --alert:#E8A23D; --good:#5FB88A; --bad:#D9666B;
-  --text:#E9EEF2; --muted:#8996A3; --border:#2A333D;
-  --r:10px;
-}
-*{box-sizing:border-box;margin:0;padding:0}
-html,body{background:var(--void);color:var(--text);font-family:Inter,system-ui,sans-serif;font-size:14px}
-.mono{font-family:'IBM Plex Mono',monospace}
-h1,h2,h3,.display{font-family:'Space Grotesk',sans-serif}
-a{color:var(--cold);text-decoration:none}
-button{font-family:inherit;cursor:pointer}
-::selection{background:var(--cold-dim)}
+<div class="topbar">
+  <div class="brand">
+    <div class="mark">SB</div>
+    <div><b>Shri Balaji Ops</b><span id="coverage">loading…</span></div>
+  </div>
+  <div class="topbar-right">
+    <span>{{ user.name }}</span>
+    <span class="role-chip">{{ user.role }}</span>
+    <a href="/logout">Sign out</a>
+  </div>
+</div>
 
-/* ---------- login ---------- */
-.login-wrap{min-height:100vh;display:grid;place-items:center;padding:24px}
-.login-card{width:100%;max-width:380px;background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:32px}
-.login-card h1{font-size:20px;margin-bottom:4px}
-.login-card p.sub{color:var(--muted);font-size:12.5px;margin-bottom:24px}
-.field{margin-bottom:14px}
-.field label{display:block;font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:6px}
-input,select,textarea{width:100%;background:var(--void);border:1px solid var(--border);color:var(--text);padding:10px 12px;border-radius:8px;font-family:inherit;font-size:13px}
-input:focus,select:focus{outline:none;border-color:var(--cold)}
-.btn{background:var(--cold);color:#0B1116;border:none;padding:10px 16px;border-radius:8px;font-weight:600;font-size:13px}
-.btn:hover{filter:brightness(1.08)}
-.btn.ghost{background:var(--raised);color:var(--text);border:1px solid var(--border)}
-.btn.ghost:hover{border-color:var(--cold)}
-.btn.sm{padding:6px 11px;font-size:12px}
-.btn:disabled{opacity:.5;cursor:not-allowed}
-.err{background:rgba(217,102,107,.12);border:1px solid rgba(217,102,107,.35);color:var(--bad);padding:9px 12px;border-radius:8px;font-size:12.5px;margin-bottom:14px}
+<div class="tabs">
+  <div class="tab active" data-view="dashboard">Dashboard</div>
+  <div class="tab" data-view="funnel">Cycle</div>
+  <div class="tab" data-view="products">Products</div>
+  <div class="tab" data-view="swaps">Route &amp; Swaps</div>
+  <div class="tab" data-view="rejects">Rejects</div>
+  <div class="tab" data-view="quality">Data Quality</div>
+  <div class="tab" data-view="views">My Views</div>
+  {% if user.role == 'admin' %}
+  <div class="tab" data-view="upload">Upload</div>
+  <div class="tab" data-view="alerts">Alerts</div>
+  <div class="tab" data-view="team">Team</div>
+  {% endif %}
+</div>
 
-/* ---------- shell ---------- */
-.topbar{display:flex;align-items:center;justify-content:space-between;padding:0 22px;height:56px;border-bottom:1px solid var(--border);background:var(--panel);position:sticky;top:0;z-index:40}
-.brand{display:flex;align-items:center;gap:11px}
-.brand .mark{width:26px;height:26px;border-radius:7px;background:linear-gradient(135deg,var(--cold),var(--cold-dim));display:grid;place-items:center;font-family:'Space Grotesk';font-weight:700;font-size:12px;color:#0B1116}
-.brand b{font-family:'Space Grotesk';font-size:14.5px;font-weight:600}
-.brand span{color:var(--muted);font-size:11.5px;margin-left:8px}
-.topbar-right{display:flex;align-items:center;gap:14px;font-size:12.5px;color:var(--muted)}
-.role-chip{font-size:10.5px;padding:3px 9px;border-radius:20px;background:var(--raised);border:1px solid var(--border)}
+<!-- ============ FILTER BAR (shared) ============ -->
+<div style="max-width:1500px;margin:0 auto;padding:22px 22px 0" id="filterHost">
+  <div class="filterbar">
+    <div class="filter-head">
+      <div class="filter-title">Filters — every number below recalculates</div>
+      <div class="filter-actions">
+        <select id="quickRange" style="width:auto;padding:7px 10px;font-size:12px">
+          <option value="">Custom range</option>
+          <option value="1">Latest day</option>
+          <option value="7" selected>Last 7 days</option>
+          <option value="14">Last 14 days</option>
+          <option value="0">All loaded data</option>
+        </select>
+        <button class="btn sm ghost" id="resetBtn">Reset</button>
+        <button class="btn sm" id="applyBtn">Apply</button>
+      </div>
+    </div>
+    <div class="filter-grid">
+      <div class="field" style="margin:0"><label>From</label><input type="date" id="dateFrom"></div>
+      <div class="field" style="margin:0"><label>To</label><input type="date" id="dateTo"></div>
+      <div class="field" style="margin:0"><label>Department</label><div class="ms" data-key="departments"></div></div>
+      <div class="field" style="margin:0"><label>Category</label><div class="ms" data-key="categories"></div></div>
+      <div class="field" style="margin:0"><label>Brand</label><div class="ms" data-key="brands"></div></div>
+      <div class="field" style="margin:0"><label>Store</label><div class="ms" data-key="stores"></div></div>
+      <div class="field" style="margin:0"><label>Vehicle</label><div class="ms" data-key="vehicles"></div></div>
+    </div>
+    <div class="chipbar" id="chipbar"></div>
+  </div>
+</div>
 
-.tabs{display:flex;gap:2px;padding:0 22px;background:var(--panel);border-bottom:1px solid var(--border);position:sticky;top:56px;z-index:35;overflow-x:auto}
-.tab{padding:11px 16px;font-size:13px;font-weight:500;color:var(--muted);border-bottom:2px solid transparent;white-space:nowrap}
-.tab:hover{color:var(--text)}
-.tab.active{color:var(--text);border-bottom-color:var(--cold)}
-.view{display:none;padding:22px;max-width:1500px;margin:0 auto}
-.view.active{display:block}
+<!-- ============ DASHBOARD ============ -->
+<div class="view active" id="view-dashboard">
+  <div class="kpis" id="kpis"></div>
 
-/* ---------- filter bar ---------- */
-.filterbar{background:var(--panel);border:1px solid var(--border);border-radius:var(--r);padding:14px 16px;margin-bottom:18px}
-.filter-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:10px}
-.filter-title{font-size:11px;text-transform:uppercase;letter-spacing:.09em;color:var(--muted)}
-.filter-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(155px,1fr));gap:10px}
-.filter-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
-.ms{position:relative}
-.ms-btn{width:100%;text-align:left;background:var(--void);border:1px solid var(--border);color:var(--text);padding:9px 11px;border-radius:8px;font-size:12.5px;display:flex;justify-content:space-between;gap:8px;align-items:center}
-.ms-btn:hover{border-color:var(--cold-dim)}
-.ms-btn .cnt{font-size:10.5px;color:var(--cold);font-family:'IBM Plex Mono'}
-.ms-pop{display:none;position:absolute;top:calc(100% + 4px);left:0;right:0;background:var(--raised);border:1px solid var(--border);border-radius:8px;max-height:260px;overflow:auto;z-index:50;padding:6px;box-shadow:0 12px 32px rgba(0,0,0,.5)}
-.ms-pop.open{display:block}
-.ms-search{margin-bottom:6px}
-.ms-opt{display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:6px;font-size:12.5px;cursor:pointer}
-.ms-opt:hover{background:var(--hover)}
-.ms-opt input{width:auto}
-.chipbar{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px}
-.chip{font-size:11px;background:var(--raised);border:1px solid var(--border);padding:3px 9px;border-radius:20px;display:flex;align-items:center;gap:6px}
-.chip b{font-weight:500;color:var(--muted)}
-.chip .x{cursor:pointer;color:var(--muted)}
-.chip .x:hover{color:var(--bad)}
+  <div class="panel">
+    <div class="panel-head">
+      <div>
+        <div class="panel-title">Packet journey</div>
+        <div class="panel-sub">Ordered → picked → received, traced across the batching and GRN files. The
+          two losses are different problems: what never left the warehouse isn't claimable against Flipkart.</div>
+      </div>
+    </div>
+    <div class="funnel" id="funnel"></div>
+  </div>
 
-/* ---------- kpi ---------- */
-.kpis{display:grid;grid-template-columns:1.35fr 1fr 1fr 1fr;gap:13px;margin-bottom:18px}
-.kpi{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:17px 19px}
-.kpi.hero{background:linear-gradient(135deg,var(--panel),var(--raised));border-color:var(--cold-dim);position:relative;overflow:hidden}
-.kpi.hero::before{content:'';position:absolute;right:-34px;top:-34px;width:150px;height:150px;border-radius:50%;background:radial-gradient(circle,rgba(79,180,219,.16),transparent 70%)}
-.kpi-label{font-size:10.5px;text-transform:uppercase;letter-spacing:.09em;color:var(--muted);margin-bottom:8px}
-.kpi-val{font-family:'IBM Plex Mono';font-size:28px;font-weight:600;line-height:1}
-.kpi.hero .kpi-val{font-size:36px;color:var(--cold)}
-.kpi-sub{font-size:11.5px;color:var(--muted);margin-top:8px}
-.kpi-sub b{color:var(--good)}
-.track{height:5px;background:var(--raised);border-radius:10px;margin-top:11px;overflow:hidden}
-.fill{height:100%;border-radius:10px;background:linear-gradient(90deg,var(--cold),var(--alert))}
+  <div class="panel">
+    <div class="panel-head">
+      <div>
+        <div class="panel-title">Claimable gap over time</div>
+        <div class="panel-sub">Dispatched minus received minus recorded damage, by day.</div>
+      </div>
+      <div class="mono muted" style="font-size:11px">target 0.20%</div>
+    </div>
+    <div id="trend"></div>
+  </div>
 
-/* ---------- panels ---------- */
-.panel{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:18px 20px;margin-bottom:18px}
-.panel-head{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:14px;flex-wrap:wrap}
-.panel-title{font-family:'Space Grotesk';font-size:14px;font-weight:600}
-.panel-sub{font-size:11.5px;color:var(--muted);margin-top:2px;line-height:1.5;max-width:640px}
-.panel-actions{flex-shrink:0}
-.seg{display:inline-flex;border:1px solid var(--border);border-radius:8px;overflow:hidden}
-.seg-btn{background:var(--panel);border:none;color:var(--muted);font-size:11.5px;font-weight:600;padding:7px 13px;cursor:pointer;font-family:inherit}
-.seg-btn+.seg-btn{border-left:1px solid var(--border)}
-.seg-btn.active{background:var(--raised);color:var(--text)}
-.gap-bad{color:var(--bad)}
-.gap-ok{color:var(--muted)}
-.tag-unref{display:inline-block;font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);background:var(--raised);border:1px solid var(--border);border-radius:5px;padding:2px 7px}
-.grid2{display:grid;grid-template-columns:1.55fr 1fr;gap:16px}
-@media(max-width:1040px){.grid2{grid-template-columns:1fr}.kpis{grid-template-columns:1fr 1fr}}
-@media(max-width:620px){.kpis{grid-template-columns:1fr}}
+  <div class="grid2">
+    <div class="panel">
+      <div class="panel-head"><div>
+        <div class="panel-title">Store ranking</div>
+        <div class="panel-sub">A store is marked <b>Repeat</b> only when it breaches on most of its
+          loaded days with meaningful volume — one bad day is noise, not a pattern.</div>
+      </div></div>
+      <div class="tbl-wrap"><table id="storeTbl"></table></div>
+    </div>
+    <div class="panel">
+      <div class="panel-head"><div><div class="panel-title">Category breakdown</div>
+        <div class="panel-sub">Claimable gap by category.</div></div></div>
+      <div id="catList"></div>
+    </div>
+  </div>
+</div>
 
-/* funnel */
-.funnel{display:flex;align-items:flex-start}
-.fstage{flex:1;text-align:center;min-width:0}
-.fval{font-family:'IBM Plex Mono';font-size:20px;font-weight:600}
-.flabel{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;margin-top:4px}
-.fbar{height:30px;margin:9px 5px 0;border-radius:6px;background:var(--cold-dim)}
-.fbar.end{background:linear-gradient(90deg,var(--cold),var(--good))}
-.floss{font-size:10.5px;font-family:'IBM Plex Mono';margin-top:7px;padding:2px 8px;border-radius:20px;display:inline-block}
-.floss.big{background:rgba(217,102,107,.15);color:var(--bad)}
-.floss.small{background:rgba(232,162,61,.15);color:var(--alert)}
-.farrow{color:var(--muted);padding:14px 3px 0;font-size:15px}
+<!-- ============ PRODUCTS ============ -->
+<div class="view" id="view-products">
+  <div class="panel">
+    <div class="panel-head"><div>
+      <div class="panel-title">Product-level shortage</div>
+      <div class="panel-sub">Sorted by units unaccounted for. A product short at nearly every store on the
+        same day points upstream — to picking or counting — not to the stores.</div>
+    </div></div>
+    <div class="tbl-wrap"><table id="prodTbl"></table></div>
+  </div>
+</div>
 
-/* tables */
-table{width:100%;border-collapse:collapse;font-size:12.5px}
-th{text-align:left;color:var(--muted);font-weight:500;font-size:10.5px;text-transform:uppercase;letter-spacing:.06em;padding:0 10px 9px 0;border-bottom:1px solid var(--border);white-space:nowrap;cursor:pointer;user-select:none}
-th:hover{color:var(--text)}
-th.no-sort{cursor:default}
-td{padding:9px 10px 9px 0;border-bottom:1px solid rgba(42,51,61,.55);font-family:'IBM Plex Mono';vertical-align:middle}
-td.name{font-family:Inter}
-th.num,td.num{text-align:right}
-tr:hover td{background:rgba(38,49,59,.35)}
-.tbl-wrap{overflow-x:auto;max-height:520px;overflow-y:auto}
-.heat{width:66px;height:6px;background:var(--raised);border-radius:4px;overflow:hidden;display:inline-block;vertical-align:middle;margin-right:8px}
-.heat i{display:block;height:100%;border-radius:4px}
-.pill{font-size:10.5px;padding:2px 9px;border-radius:20px;font-family:'IBM Plex Mono';white-space:nowrap}
-.pill.crit{background:rgba(217,102,107,.15);color:var(--bad)}
-.pill.warn{background:rgba(232,162,61,.15);color:var(--alert)}
-.pill.ok{background:rgba(95,184,138,.15);color:var(--good)}
-.pill.info{background:rgba(79,180,219,.15);color:var(--cold)}
+<!-- ============ SWAPS ============ -->
+<div class="view" id="view-swaps">
+  <div class="panel">
+    <div class="panel-head"><div>
+      <div class="panel-title">Excess / shortage cross-reference</div>
+      <div class="panel-sub">Where the same product was short at one store and excess at another on the same
+        day. <b>Same-vehicle</b> pairs are the ones worth a phone call; a shortage spread thin across many
+        stores usually means an upstream count problem, not a crate swap. The evidence is laid out —
+        the call is yours.</div>
+    </div></div>
+    <div id="swapList"></div>
+  </div>
+</div>
 
-.catrow{display:flex;align-items:center;gap:12px;padding:9px 0;border-bottom:1px solid rgba(42,51,61,.55)}
-.catrow:last-child{border:none}
-.catname{font-size:12.5px;min-width:118px}
-.catbar{flex:1;height:6px;background:var(--raised);border-radius:4px;overflow:hidden}
-.catbar i{display:block;height:100%;border-radius:4px}
-.catval{font-family:'IBM Plex Mono';font-size:12px;width:80px;text-align:right;color:var(--muted)}
-.catval b{color:var(--text)}
+<!-- ============ REJECTS ============ -->
+<div class="view" id="view-rejects">
+  <div class="panel">
+    <div class="panel-head"><div><div class="panel-title">Rejects &amp; damage</div>
+      <div class="panel-sub">By reason and category.</div></div></div>
+    <div class="tbl-wrap"><table id="rejTbl"></table></div>
+  </div>
+</div>
 
-/* upload */
-.drop{border:1.5px dashed var(--border);border-radius:12px;padding:38px 20px;text-align:center;background:var(--panel);transition:.15s}
+<!-- ============ QUALITY ============ -->
+<div class="view" id="view-quality">
+  <div class="panel">
+    <div class="panel-head"><div><div class="panel-title">Data quality</div>
+      <div class="panel-sub">Problems in the inputs, so a broken file is never mistaken for a broken store.</div>
+    </div></div>
+    <div id="qualityList"></div>
+  </div>
+  <div class="panel">
+    <div class="panel-head"><div><div class="panel-title">Upload history</div></div></div>
+    <div class="tbl-wrap"><table id="uploadTbl"></table></div>
+  </div>
+</div>
 
-/* upload templates */
-.tmpl-box{border:1px solid var(--border);border-radius:12px;background:var(--panel);padding:14px 16px;margin-bottom:14px}
-.tmpl-head{display:flex;justify-content:space-between;align-items:flex-start;gap:16px}
-.tmpl-title{font-size:13px;font-weight:600;margin-bottom:4px}
-.tmpl-sub{font-size:11.5px;color:var(--muted);line-height:1.6;max-width:70ch}
-.tmpl-actions{display:flex;gap:8px;flex-shrink:0}
-.tmpl-actions a.btn{text-decoration:none;display:inline-block}
-.tmpl-list{margin-top:14px;border-top:1px solid var(--border);padding-top:4px}
-.tmpl-row{display:flex;align-items:flex-start;gap:12px;padding:11px 0;border-bottom:1px solid var(--border)}
-.tmpl-row:last-child{border-bottom:none}
-.tmpl-stage{font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:var(--muted);background:var(--raised);border:1px solid var(--border);border-radius:5px;padding:3px 7px;white-space:nowrap;flex-shrink:0;min-width:96px;text-align:center}
-.tmpl-main{flex:1;min-width:0}
-.tmpl-name{font-size:12.5px;font-weight:600;margin-bottom:3px}
-.tmpl-why{font-size:11.5px;color:var(--muted);line-height:1.55}
-.tmpl-note{font-size:11px;color:var(--muted);line-height:1.55;margin-top:5px;padding-left:11px;border-left:1px solid var(--border)}
-.tmpl-cols{font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:var(--cold-dim);margin-top:5px;word-break:break-word;line-height:1.6}
-.tmpl-dl{flex-shrink:0}
-.tmpl-dl a{text-decoration:none;display:inline-block}
-.drop.over{border-color:var(--cold);background:var(--raised)}
-.drop h3{font-size:15px;margin-bottom:6px}
-.drop p{color:var(--muted);font-size:12.5px;margin-bottom:16px}
-.filelist{margin-top:14px;display:flex;flex-direction:column;gap:7px}
-.fileitem{display:flex;align-items:center;justify-content:space-between;gap:12px;background:var(--raised);border:1px solid var(--border);border-radius:8px;padding:9px 13px;font-size:12.5px}
-.res{border-left:2px solid var(--border);padding:9px 0 9px 13px;margin-bottom:9px;font-size:12.5px}
-.res.ok{border-left-color:var(--good)}
-.res.bad{border-left-color:var(--bad)}
-.res .rnote{color:var(--muted);font-size:11.5px;margin-top:4px;line-height:1.55}
+<!-- ============ FUNNEL / CYCLE ============ -->
+<div class="view" id="view-funnel">
+  <div class="panel">
+    <div class="panel-head">
+      <div>
+        <div class="panel-title">PO → vendor → warehouse → store</div>
+        <div class="panel-sub">Every stage on its own — not filtered through store receiving. A PO shows up
+          here the day it's raised, even before anything has been delivered, batched or received.
+          Three gaps, three different owners: <b>vendor gap</b> is what the supplier fell short on,
+          <b>fulfillment gap</b> is your own picking, <b>claimable gap</b> is what's actually
+          arguable with Flipkart.</div>
+      </div>
+      <div class="panel-actions">
+        <div class="seg" id="funnelGroupBy">
+          <button class="seg-btn active" data-v="brand">By brand</button>
+          <button class="seg-btn" data-v="fsn">By product</button>
+        </div>
+      </div>
+    </div>
+    <div class="tbl-wrap"><table id="funnelTbl"></table></div>
+  </div>
+</div>
 
-/* quality */
-.issue{display:flex;gap:12px;padding:12px 0;border-bottom:1px solid rgba(42,51,61,.55)}
-.issue:last-child{border:none}
-.sev{width:3px;border-radius:3px;flex-shrink:0}
-.sev.high{background:var(--bad)}.sev.medium{background:var(--alert)}.sev.low{background:var(--cold)}
-.issue b{display:block;font-size:13px;margin-bottom:3px;font-weight:500}
-.issue p{color:var(--muted);font-size:12px;line-height:1.55}
+<!-- ============ VIEWS ============ -->
+<div class="view" id="view-views">
+  <div class="panel">
+    <div class="panel-head"><div>
+      <div class="panel-title">Saved views</div>
+      <div class="panel-sub">A view stores the current filters <em>and</em> which panels are shown. Build
+        "Morning check" or "Flipkart claims" once, reopen it against fresh data any day.</div>
+    </div></div>
+    <div style="display:flex;gap:9px;flex-wrap:wrap;align-items:flex-end;margin-bottom:8px">
+      <div class="field" style="margin:0;flex:1;min-width:200px">
+        <label>Name this view</label><input id="tmplName" placeholder="e.g. Morning check — milk only">
+      </div>
+      <button class="btn" id="saveTmpl">Save current setup</button>
+    </div>
+    <div class="wg" id="widgetPicker"></div>
+  </div>
+  <div class="panel">
+    <div class="panel-head"><div><div class="panel-title">Your views</div></div></div>
+    <div id="tmplList"></div>
+  </div>
+</div>
 
-.muted{color:var(--muted)}
-.empty{text-align:center;padding:34px 16px;color:var(--muted);font-size:12.5px}
-.spinner{width:15px;height:15px;border:2px solid var(--border);border-top-color:var(--cold);border-radius:50%;animation:spin .7s linear infinite;display:inline-block;vertical-align:middle}
-@keyframes spin{to{transform:rotate(360deg)}}
-.toast{position:fixed;bottom:22px;right:22px;background:var(--raised);border:1px solid var(--cold-dim);border-radius:10px;padding:12px 17px;font-size:12.5px;z-index:100;box-shadow:0 12px 32px rgba(0,0,0,.5);max-width:340px}
-pre.digest{background:var(--void);border:1px solid var(--border);border-radius:8px;padding:15px;font-family:'IBM Plex Mono';font-size:11.5px;line-height:1.65;white-space:pre-wrap;color:var(--muted);max-height:400px;overflow:auto}
-.tmpl{display:flex;align-items:center;justify-content:space-between;gap:12px;background:var(--raised);border:1px solid var(--border);border-radius:8px;padding:11px 14px;margin-bottom:8px}
-.tmpl-meta{font-size:11px;color:var(--muted);margin-top:3px}
-.wg{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
-.wg label{display:flex;align-items:center;gap:6px;font-size:12px;background:var(--void);border:1px solid var(--border);padding:6px 11px;border-radius:20px;cursor:pointer}
-.wg label:has(input:checked){border-color:var(--cold);color:var(--cold)}
-.wg input{width:auto}
+<!-- ============ UPLOAD ============ -->
+{% if user.role == 'admin' %}
+<div class="view" id="view-upload">
+  <div class="panel">
+    <div class="panel-head"><div>
+      <div class="panel-title">Daily upload</div>
+      <div class="panel-sub">Drop the day's exports — batching, store receiving, warehouse receiving,
+        rejects, route, indent. Type is detected from the columns. Re-uploading a date replaces it rather
+        than double-counting, so overlapping historical exports are safe.</div>
+    </div></div>
+    <div class="tmpl-box">
+      <div class="tmpl-head">
+        <div>
+          <div class="tmpl-title">Blank templates</div>
+          <div class="tmpl-sub">Fill these instead of building sheets from scratch — the column
+            headers are what the app matches on, and FSN plus the store code are what link a PO
+            to what the store finally received.</div>
+        </div>
+        <div class="tmpl-actions">
+          <a class="btn sm" href="/api/templates.zip">Download all</a>
+          <button class="btn ghost sm" id="tmplToggle">Show list</button>
+        </div>
+      </div>
+      <div id="tmplList" class="tmpl-list" style="display:none"></div>
+    </div>
+    <div class="drop" id="drop">
+      <h3>Drop files here</h3>
+      <p>.xlsx or .csv — several at once is fine</p>
+      <input type="file" id="fileInput" multiple hidden accept=".csv,.xlsx,.xls,.xlsm">
+      <button class="btn ghost" onclick="document.getElementById('fileInput').click()">Choose files</button>
+    </div>
+    <div class="filelist" id="fileList"></div>
+    <div style="margin-top:14px;display:none" id="uploadActions">
+      <button class="btn" id="uploadBtn">Import</button>
+      <button class="btn ghost sm" id="clearFiles">Clear</button>
+    </div>
+    <div id="uploadResults" style="margin-top:16px"></div>
+  </div>
+</div>
+
+<div class="view" id="view-alerts">
+  <div class="panel">
+    <div class="panel-head"><div>
+      <div class="panel-title">Email digest</div>
+      <div class="panel-sub">Fires only on repeated breaches over a 7-day window — a store crossing the
+        threshold once won't trigger it. Preview shows exactly what would land in the inbox.</div>
+    </div><button class="btn sm" id="runAlerts">Send now</button></div>
+    <pre class="digest" id="alertPreview">Loading…</pre>
+  </div>
+</div>
+
+<div class="view" id="view-team">
+  <div class="panel">
+    <div class="panel-head"><div>
+      <div class="panel-title">Team access</div>
+      <div class="panel-sub">Viewers see every dashboard but cannot upload or change data.</div>
+    </div></div>
+    <div style="display:flex;gap:9px;flex-wrap:wrap;align-items:flex-end;margin-bottom:16px">
+      <div class="field" style="margin:0;flex:1;min-width:140px"><label>Name</label><input id="nuName"></div>
+      <div class="field" style="margin:0;flex:1;min-width:180px"><label>Email</label><input id="nuEmail" type="email"></div>
+      <div class="field" style="margin:0;min-width:130px"><label>Temp password</label><input id="nuPass" value="changeme"></div>
+      <div class="field" style="margin:0;min-width:110px"><label>Role</label>
+        <select id="nuRole"><option value="viewer">Viewer</option><option value="admin">Admin</option></select></div>
+      <button class="btn" id="addUser">Add</button>
+    </div>
+    <div class="tbl-wrap"><table id="userTbl"></table></div>
+  </div>
+</div>
+{% endif %}
+
+<script>window.USER = {{ user|tojson }};</script>
+<script src="/static/app.js"></script>
+</body>
+</html>
