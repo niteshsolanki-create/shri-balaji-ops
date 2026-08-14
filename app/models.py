@@ -136,12 +136,28 @@ BRAND_CANON = {
     "humpyfarm": "Humpy Farm",
     "rishta": "Rishta",
     "vaidyam": "VAIDYAM",
-    "britannia": "BRITANNIA",
+    "britannia": "Britannia",
+    "brittannia": "Britannia",     # recurring misspelling in the source export
     "bonn": "Bonn",
+    "harvestgold": "Harvest Gold",
+    "idfresh": "iD Fresh",         # brand styles itself lowercase-i
+    "englishoven": "English Oven",
+    "naturbaked": "Naturbaked",
+    "laamericana": "LA Americana",
+    "thehealthfactory": "The Health Factory",
 }
 
 
 def canon_brand(raw):
+    """
+    One spelling per brand.
+
+    Everything unknown is title-cased rather than passed through, because
+    two mixed-case variants of the same brand ("harvest Gold" / "Harvest
+    Gold", "iD Fresh" / "ID fresh") would otherwise stay separate and each
+    show as its own supplier. Brands with deliberate styling are pinned in
+    BRAND_CANON above, which is checked first and wins.
+    """
     if raw is None:
         return None
     text = str(raw).strip()
@@ -150,12 +166,7 @@ def canon_brand(raw):
     key = text.lower().replace(" ", "").replace(".", "").replace("-", "")
     if key in BRAND_CANON:
         return BRAND_CANON[key]
-    # An all-caps or all-lower brand is almost always a casing artefact, not a
-    # deliberate style, so normalise it. Mixed-case is left as the source had
-    # it, since that is usually the brand's own styling.
-    if text.isupper() or text.islower():
-        return text.title()
-    return text
+    return text.title()
 
 
 # --------------------------------------------------------------------------
