@@ -340,7 +340,36 @@ def load_product_master(db, df, ctx, progress=None, replace=True):
         "mrp": pd.to_numeric(df[_col(df, "mrp")], errors="coerce"),
         "price": pd.to_numeric(df[_col(df, "price")], errors="coerce"),
     })
-    out = out[out["fsn"] != ""].drop_duplicates(subset="fsn", keep="first")
+    out = out[out["fsn"] != ""]
+
+    # dim_product is joined onto every fact row by FSN, so it MUST be unique
+    # per FSN - two rows for one FSN would double that product's quantities
+    # everywhere. But which row survives matters, and the old keep="first"
+    # picked by file order, which is arbitrary and silent.
+    #
+    # Two changes: brand and category are canonicalised BEFORE comparing, so
+    # pure casing variants stop registering as disagreements; and where rows
+    # genuinely disagree on brand or category, that is reported rather than
+    # quietly resolved. A category conflict in particular moves the product
+    # between departments, so it changes reported numbers.
+    conflicts = {"brand": [], "category": []}
+    dup_mask = out.duplicated(subset="fsn", keep=False)
+    if dup_mask.any():
+        for fsn, grp in out[dup_mask].groupby("fsn"):
+            for field in ("brand", "category"):
+                vals = [v for v in grp[field].dropna().unique() if str(v).strip()]
+                if len(vals) > 1:
+                    conflicts[field].append((fsn, vals))
+
+    # Prefer the most complete row rather than the first one: a row with a
+    # brand and category beats one with blanks, whatever the file order.
+    out["_filled"] = out[["ean", "brand", "category", "title"]].notna().sum(axis=1) \
+        + (out[["ean", "brand", "category", "title"]] != "").sum(axis=1)
+    out = (out.sort_values("_filled", ascending=False)
+              .drop_duplicates(subset="fsn", keep="first")
+              .drop(columns="_filled")
+              .sort_values("fsn"))
+
     dropped = n_in - len(out)
     if replace:
         db.query(DimProduct).delete()
@@ -348,7 +377,9 @@ def load_product_master(db, df, ctx, progress=None, replace=True):
         ctx.pop("pm", None)
     cols = ["fsn", "ean", "brand", "category", "title", "mrp", "price"]
     n = copy_into(out[cols], "dim_product", cols, progress)
-    return n, dropped, [], {"dupes": dropped}
+    return n, dropped, [], {"dupes": dropped,
+                            "brand_conflicts": conflicts["brand"],
+                            "cat_conflicts": conflicts["category"]}
 
 
 def load_batching(db, df, ctx, progress=None, replace=True):
@@ -566,8 +597,20 @@ def summarise(ftype, stats, dates, loaded):
     if ftype == "store_master":
         notes.append("Store master replaced in full.")
     elif ftype == "product_master":
-        notes.append(f"Category casing normalised; {stats.get('dupes', 0)} "
-                     f"duplicate FSN rows collapsed.")
+        bc = stats.get("brand_conflicts") or []
+        cc = stats.get("cat_conflicts") or []
+        clean = stats.get("dupes", 0) - len(bc) - len(cc)
+        notes.append(f"Brand and category casing normalised; {stats.get('dupes', 0)} "
+                     f"duplicate FSN rows collapsed ({max(clean, 0)} were identical "
+                     f"once casing was normalised).")
+        if cc:
+            detail = "; ".join(f"{fsn}: {' vs '.join(map(str, vals))}" for fsn, vals in cc[:5])
+            notes.append(f"{len(cc)} FSN(s) disagree on CATEGORY, which moves them "
+                         f"between departments - the most complete row was kept. {detail}")
+        if bc:
+            detail = "; ".join(f"{fsn}: {' vs '.join(map(str, vals))}" for fsn, vals in bc[:5])
+            notes.append(f"{len(bc)} FSN(s) disagree on BRAND - the most complete row "
+                         f"was kept. {detail}")
     elif ftype == "batching":
         notes.append(f"Dispatch loaded for {len(dates)} date(s).")
     elif ftype == "store_receiving":
