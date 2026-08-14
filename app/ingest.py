@@ -48,7 +48,7 @@ import pandas as pd
 from sqlalchemy import delete
 
 from .models import (SessionLocal, engine, DimStore, DimProduct, FactDispatch,
-                     FactStoreReceiving, FactWarehouseReceiving, FactReject,
+                     FactStoreReceiving, FactReject,
                      FactRoute, FactIndent, UploadLog,
                      canon_category, FSN_PREFIX_CATEGORY)
 
@@ -89,8 +89,13 @@ def detect_type(df):
         return "rejects", 1.0
     if has("vertical") and has("po", "qty"):
         return "indent", 1.0
+    # Warehouse Inbound was retired - vendor deliveries are recorded in the
+    # Indent file's "Final Received Qty" instead, so there is one place that
+    # records what a vendor delivered rather than two that can disagree.
+    # Detected explicitly so an old file gets a clear message instead of
+    # being silently mis-detected as another type.
     if has("po", "qty") and has("received") and not has("cutoff") and not has("warehouse", "id"):
-        return "wh_receiving", 1.0
+        return "wh_receiving_retired", 1.0
 
     scores = {}
     for name, sig in SIGNATURES.items():
@@ -640,9 +645,18 @@ def ingest_path(filename, path, user_email, forced_type=None, progress=None):
 
         sample = read_sample(csv_path, encoding)
         ftype = forced_type or detect_type(sample)[0]
+        if ftype == "wh_receiving_retired":
+            raise ValueError(
+                "This looks like the old Warehouse Inbound file, which is no longer "
+                "used. Vendor deliveries now go in the Indent file's 'Final Received "
+                "Qty' column, so there's only one place recording what a vendor "
+                "actually delivered. Download the current Indent template from the "
+                "Upload tab.")
         if not ftype:
             raise ValueError("Could not recognise this file's columns. "
                              "Pick the type manually.")
+        if ftype not in LOADERS:
+            raise ValueError(f"No importer for file type '{ftype}'.")
 
         loader = LOADERS[ftype]
         total_loaded = total_dropped = rows_in = 0
