@@ -206,20 +206,25 @@ function renderKpis(h) {
 
 function renderFunnel(h) {
   const pickLoss = h.ordered - h.picked, transitLoss = h.dispatched - h.received;
-  const stage = (v, l, loss, cls, end) => `
+  const stage = (v, l, loss, cls, end, note) => `
     <div class="fstage">
       <div class="fval" ${end ? 'style="color:var(--good)"' : ''}>${n(v)}</div>
       <div class="flabel">${l}</div>
       <div class="fbar ${end ? 'end' : ''}"></div>
-      ${loss ? `<div class="floss ${cls}">−${n(loss)} ${cls === 'big' ? 'at picking' : 'in transit / at store'}</div>` : ''}
+      ${loss ? `<div class="floss ${cls}">−${n(loss)} ${cls === 'big' ? 'at picking' : 'in transit'}</div>` : ''}
+      ${note ? `<div class="fnote">${note}</div>` : ''}
     </div>`;
+  // Journey ends at the store — that's where your liability ends. Damage is
+  // shown as a note on receipt rather than a fourth stage: it's needed to
+  // keep it out of the claim, not to be a headline metric.
+  const dmgNote = h.damaged
+    ? `${n(h.damaged)} arrived damaged — excluded from the claim`
+    : '';
   $('#funnel').innerHTML =
     stage(h.ordered, 'Ordered by stores') + '<div class="farrow">→</div>' +
     stage(h.picked, 'Picked & dispatched', pickLoss > 0 ? pickLoss : 0, 'big') +
     '<div class="farrow">→</div>' +
-    stage(h.received, 'Received at store', transitLoss > 0 ? transitLoss : 0, 'small') +
-    '<div class="farrow">→</div>' +
-    stage(h.received - h.damaged, 'Sellable on shelf', 0, '', true);
+    stage(h.received, 'Received at store', transitLoss > 0 ? transitLoss : 0, 'small', true, dmgNote);
 }
 
 function renderTrend(rows) {
