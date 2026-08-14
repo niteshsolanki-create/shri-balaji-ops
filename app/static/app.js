@@ -291,13 +291,25 @@ function renderCats(rows) {
 }
 
 function renderProducts(rows) {
-  if (!rows.length) { $('#prodTbl').innerHTML = '<tbody><tr><td class="empty">Nothing short in this selection.</td></tr></tbody>'; return; }
-  sortable('prodTbl', rows, [
+  if (!rows.length) { $('#prodTbl').innerHTML = '<tbody><tr><td class="empty">No products in this selection.</td></tr></tbody>'; return; }
+  const truncated = rows.some(r => r.truncated);
+  const real = rows.filter(r => !r.truncated);
+  const cnt = $('#prodCount');
+  if (cnt) {
+    cnt.textContent = truncated
+      ? `${n(real.length)} products shown (list truncated)`
+      : `${n(real.length)} products`;
+  }
+  sortable('prodTbl', real, [
     { label: 'Product', cls: 'name', render: r => r.description || r.fsn, field: 'description' },
     { label: 'Category', cls: 'name', render: r => r.category || '—', field: 'category' },
     { label: 'Stores hit', render: r => n(r.stores_affected), field: 'stores_affected' },
+    { label: 'Picked', render: r => r.has_batching ? n(r.picked) : '<span class="gap-nodata" title="No batching data for this filter">—</span>', field: 'picked' },
+    { label: 'Fulfil gap', render: r => r.fulfillment_gap === null || r.fulfillment_gap === undefined
+        ? '<span class="gap-nodata" title="No batching data for this filter">—</span>'
+        : (r.fulfillment_gap ? `<span class="gap-bad">${n(r.fulfillment_gap)}</span>` : '<span class="gap-ok">0</span>'), field: 'fulfillment_gap' },
     { label: 'Dispatched', render: r => n(r.dispatched), field: 'dispatched' },
-    { label: 'Short', render: r => n(r.claimable_units), field: 'claimable_units', sort: 1 },
+    { label: 'Short', render: r => r.claimable_units ? `<span class="gap-bad">${n(r.claimable_units)}</span>` : '<span class="gap-ok">0</span>', field: 'claimable_units', sort: 1 },
     { label: 'Gap %', render: r => `<span style="color:${gapColor(r.gap_pct)}">${pct(r.gap_pct)}</span>`, field: 'gap_pct' }
   ], 'products');
 }
