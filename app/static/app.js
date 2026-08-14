@@ -38,7 +38,7 @@ $$('.tab').forEach(t => t.onclick = () => {
   if (t.dataset.view === 'team') loadUsers();
   if (t.dataset.view === 'alerts') loadAlertPreview();
   if (t.dataset.view === 'views') loadTemplates();
-  if (t.dataset.view === 'funnel') { loadFunnel(); loadPoTrace(); }
+  if (t.dataset.view === 'funnel') { loadFunnel(); }
 });
 
 /* ---------------- multiselects ---------------- */
@@ -158,7 +158,7 @@ async function load() {
   if (!r.ok) { toast('Could not load data'); return; }
   S.data = await r.json();
   renderAll();
-  if ($('#view-funnel').classList.contains('active')) { loadFunnel(); loadPoTrace(); }
+  if ($('#view-funnel').classList.contains('active')) { loadFunnel(); }
 }
 
 function renderAll() {
@@ -395,39 +395,6 @@ function renderCycleFunnel(rows, groupBy) {
         <td class="num">${gapCell(r.fulfillment_gap, r.store_ordered)}</td>
         <td class="num">${n(r.store_received)}</td>
         <td class="num">${gapCell(r.claimable_gap, r.picked)}</td>
-      </tr>`).join('')}
-    </tbody>`;
-}
-
-async function loadPoTrace() {
-  $('#poTraceTbl').innerHTML = '<div class="empty">Loading…</div>';
-  const j = await (await fetch('/api/po-trace', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(S.filters)
-  })).json();
-  renderPoTrace(j.rows || []);
-}
-
-function renderPoTrace(rows) {
-  if (!rows.length) {
-    $('#poTraceTbl').innerHTML = '<div class="empty">No indent or warehouse-inbound data for this filter yet.</div>';
-    return;
-  }
-  $('#poTraceTbl').innerHTML = `
-    <thead><tr>
-      <th>PO Reference</th><th>Brand</th><th>FSN</th>
-      <th class="num">Indent qty</th><th class="num">Inbound received</th><th class="num">Vendor gap</th>
-    </tr></thead>
-    <tbody>${rows.map(r => `
-      <tr>
-        <td class="name">${r.matched
-          ? r.po_reference
-          : `<span class="tag-unref">No reference</span>`}</td>
-        <td>${r.brand}</td>
-        <td>${r.fsn}</td>
-        <td class="num">${n(r.indent_qty)}</td>
-        <td class="num">${n(r.inbound_received)}</td>
-        <td class="num">${gapCell(r.vendor_gap, r.indent_qty)}</td>
       </tr>`).join('')}
     </tbody>`;
 }
