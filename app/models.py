@@ -195,23 +195,6 @@ class FactStoreReceiving(Base):
 Index("ix_sr_date_wh", FactStoreReceiving.invoice_date, FactStoreReceiving.warehouse_id)
 
 
-class FactWarehouseReceiving(Base):
-    """What the warehouse itself received from suppliers."""
-    __tablename__ = "fact_wh_receiving"
-    id = Column(Integer, primary_key=True)
-    date = Column(Date, index=True)
-    ean = Column(String(20))
-    po_reference = Column(String(60), index=True)
-    fsn = Column(String(40), index=True)
-    product = Column(String(255))
-    brand = Column(String(80))
-    category = Column(String(60), index=True)
-    po_qty = Column(Integer, default=0)
-    received_qty = Column(Integer, default=0)
-    expiry_date = Column(Date)
-    short_qty = Column(Integer, default=0)
-
-
 class FactReject(Base):
     __tablename__ = "fact_rejects"
     id = Column(Integer, primary_key=True)
