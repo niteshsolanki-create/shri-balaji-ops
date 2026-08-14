@@ -488,11 +488,11 @@ def category_breakdown(db, f):
     return sorted(out, key=lambda r: -r["claimable_units"])
 
 
-def product_detail(db, f, limit=200):
+def product_detail(db, f, limit=2000):
     """
     Per-product view across batching and GRN.
 
-    Two deliberate choices:
+    Three deliberate choices:
     - Products with no gap are KEPT. Dropping them meant you could only ever
       see problems, never confirm that the rest of the catalogue moved
       cleanly, and a product that stopped appearing was indistinguishable
@@ -500,6 +500,10 @@ def product_detail(db, f, limit=200):
     - "Picked" comes from the batching file, not the GRN's expected qty.
       Those are different numbers: expected is what the store was told to
       expect, picked is what your team actually put on the vehicle.
+    - The limit is a guard against a runaway response, not a display choice.
+      It sits well above a normal day's catalogue (~400 SKUs), and when it
+      does bite, the caller is told - a silently truncated list looks
+      identical to a complete one.
     """
     rows = _apply(db.query(
         FactStoreReceiving.fsn,
@@ -543,7 +547,19 @@ def product_detail(db, f, limit=200):
                     "dispatched": exp,
                     "received": rec, "damaged": dmg, "claimable_units": claim,
                     "gap_pct": round(100 * claim / exp, 2) if exp else 0})
-    return sorted(out, key=lambda r: -r["claimable_units"])[:limit]
+    # Sorted by claimable units so the problems surface first, then by volume
+    # so a clean high-volume SKU ranks above a clean one-unit SKU rather than
+    # landing in arbitrary order.
+    out.sort(key=lambda r: (-r["claimable_units"], -r["dispatched"]))
+    if len(out) > limit:
+        out = out[:limit]
+        out.append({"fsn": "", "description": f"… list truncated at {limit} products",
+                    "category": None, "department": None, "stores_affected": 0,
+                    "ordered": 0, "picked": 0, "fulfillment_gap": None,
+                    "has_batching": False, "dispatched": 0, "received": 0,
+                    "damaged": 0, "claimable_units": 0, "gap_pct": 0,
+                    "truncated": True})
+    return out
 
 
 def swap_candidates(db, f):
