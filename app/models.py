@@ -118,6 +118,46 @@ def category_from_fsn(fsn):
     return FSN_PREFIX_CATEGORY.get(str(fsn)[:3].upper(), "Unknown")
 
 
+# Brands arrive from Flipkart exports in whatever casing the listing used, so
+# "MOTHER DAIRY", "Mother Dairy" and "mother dairy" are all the same supplier
+# but group as three rows - which silently understates that supplier's real
+# volume in every per-brand view. Categories were already normalised; brands
+# were not. Known spellings are pinned here; anything else is title-cased so
+# at least casing alone never splits a brand.
+BRAND_CANON = {
+    "amul": "Amul",
+    "motherdairy": "Mother Dairy",
+    "parag": "Parag",
+    "vita": "Vita",
+    "frubon": "Frubon",
+    "countrydelight": "Country Delight",
+    "heritage": "Heritage",
+    "delish": "Delish",
+    "humpyfarm": "Humpy Farm",
+    "rishta": "Rishta",
+    "vaidyam": "VAIDYAM",
+    "britannia": "BRITANNIA",
+    "bonn": "Bonn",
+}
+
+
+def canon_brand(raw):
+    if raw is None:
+        return None
+    text = str(raw).strip()
+    if not text:
+        return ""
+    key = text.lower().replace(" ", "").replace(".", "").replace("-", "")
+    if key in BRAND_CANON:
+        return BRAND_CANON[key]
+    # An all-caps or all-lower brand is almost always a casing artefact, not a
+    # deliberate style, so normalise it. Mixed-case is left as the source had
+    # it, since that is usually the brand's own styling.
+    if text.isupper() or text.islower():
+        return text.title()
+    return text
+
+
 # --------------------------------------------------------------------------
 class User(Base):
     __tablename__ = "users"
