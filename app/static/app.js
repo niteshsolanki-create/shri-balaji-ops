@@ -389,7 +389,9 @@ function renderStores(rows) {
   if (!rows.length) { $('#storeTbl').innerHTML = '<tbody><tr><td class="empty">No data.</td></tr></tbody>'; return; }
   const max = Math.max(...rows.map(r => r.gap_pct), 1);
   sortable('storeTbl', rows, [
-    { label: 'Store', cls: 'name', render: r => r.name || r.warehouse_id, field: 'name' },
+    { label: 'Store', cls: 'name', render: r =>
+      `<span class="store-link" data-wh="${r.warehouse_id}" title="See which products were short at this store">${r.name || r.warehouse_id}</span>`,
+      field: 'name' },
     { label: 'Flagged', render: r => r.days_total ? `${r.days_flagged}/${r.days_total}` : '—', field: 'days_flagged' },
     { label: 'Gap %', field: 'gap_pct', sort: 1, render: r =>
       `<span class="heat"><i style="width:${(r.gap_pct / max) * 100}%;background:${gapColor(r.gap_pct)}"></i></span>${pct(r.gap_pct)}` },
@@ -397,6 +399,37 @@ function renderStores(rows) {
     { label: 'Status', render: r => `<span class="pill ${r.status === 'repeat' ? 'crit' : r.status === 'watch' ? 'warn' : 'ok'}">${
       r.status === 'repeat' ? 'Repeat' : r.status === 'watch' ? 'Watch' : 'Clean'}</span>`, field: 'status' }
   ], 'stores');
+
+  // Delegated, not bound per-cell: sortable() replaces this table's
+  // innerHTML on every column-header click, which would silently kill a
+  // per-cell click handler the moment someone sorts. The table element
+  // itself survives that replacement, so the listener is attached there
+  // once and keeps working regardless of how many times the rows re-render.
+  const tbl = $('#storeTbl');
+  if (!tbl.dataset.storeLinkWired) {
+    tbl.addEventListener('click', e => {
+      const el = e.target.closest('.store-link');
+      if (el) drillIntoStore(el.dataset.wh);
+    });
+    tbl.dataset.storeLinkWired = '1';
+  }
+}
+
+/**
+ * "This store is 106 short" is only useful if the next question - which
+ * product? - is one click away. Reuses the existing Store filter and
+ * Products tab rather than building a separate drill-down view: setting
+ * S.filters.stores to just this warehouse and switching tabs gets the same
+ * per-product breakdown that already respects every other filter.
+ */
+function drillIntoStore(warehouseId) {
+  S.filters.stores = [warehouseId];
+  const storeEl = $('.ms[data-key="stores"]');
+  if (storeEl) syncMulti(storeEl);
+  renderChips();
+  const tab = $$('.tab').find(t => t.dataset.view === 'products');
+  if (tab) tab.click();
+  load();
 }
 
 function renderCats(rows) {
