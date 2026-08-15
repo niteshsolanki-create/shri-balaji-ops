@@ -24,18 +24,25 @@ TEMPLATES = {
         "label": "Indent / PO raised",
         "stage": "1. PO raised",
         "filename": "INDENT_template.csv",
-        "why": "The start of the cycle — what you asked the vendor for.",
-        "headers": ["Indent_Date", "PO Date", "PO Reference", "Brand", "FSN",
-                    "PO Qty", "Vertical", "Title", "Final Received Qty"],
-        "example": ["2026-08-01", "2026-08-01", "AMUL-PO-0142", "Amul",
-                    "MLK000000001XYZ", "1000", "Dairy", "Amul Gold Milk 500ml", "800"],
+        "why": "What you asked the vendor for, and what they actually delivered.",
+        "headers": ["Indent_Date", "PO Date", "Brand", "FSN", "PO Qty",
+                    "Vertical", "Title", "Expected Delivery Date",
+                    "Delivery Date", "Final Received Qty"],
+        "example": ["2026-08-15", "2026-08-15", "Amul", "EEG000000001XYZ",
+                    "1000", "Dairy", "Amul Eggs 6pc", "2026-08-16",
+                    "2026-08-17", "950"],
         "notes": [
-            "PO Reference is a number YOU make up when raising the PO — write anything unique, "
-            "e.g. AMUL-PO-0142. Write the exact same value on the Warehouse Inbound file when "
-            "that delivery arrives, and the app matches this exact PO to its exact delivery "
-            "instead of just totalling the brand for the date range.",
-            "Final Received Qty closes the loop — fill it once the vendor has delivered.",
-            "Leave it blank only if the delivery hasn't happened yet.",
+            "Three dates, because they're three different events. Indent_Date is when you "
+            "raised the PO. Expected Delivery Date is when the vendor said it would arrive. "
+            "Delivery Date is when it actually arrived. Order on the 15th for the 16th, "
+            "arrives the 17th — that's one day late, and the app can only tell you that "
+            "if the 16th was recorded.",
+            "Leave Delivery Date and Final Received Qty blank until the stock arrives. Fill "
+            "both when the truck comes and you've counted it. Expected Delivery Date can be "
+            "filled the moment you raise the PO.",
+            "Split delivery (rare): add a second row with the same Indent_Date, Brand and FSN, "
+            "the later Delivery Date, and that drop's quantity — but leave PO Qty BLANK on the "
+            "second row, or the order gets counted twice.",
         ],
     },
     "batching": {
@@ -92,7 +99,8 @@ TEMPLATES = {
         "label": "Route / vehicle log",
         "stage": "3b. Vehicle leaves",
         "filename": "ROUTE_template.csv",
-        "why": "Which vehicle went where — the evidence that separates a crate swap from a genuine shortage.",
+        "why": "Which vehicle went where — kept as a manual reference; it no longer drives any "
+               "swap detection in the app.",
         "headers": ["Date", "Sno", "Store No", "Driver", "Vehicle No",
                     "Start", "End", "Crate Out", "Crate In", "Remark"],
         "example": ["2026-08-01", "1", "gur_106_wh_hl_01", "Ramesh Kumar",
@@ -100,7 +108,6 @@ TEMPLATES = {
                     "12", "11", ""],
         "notes": [
             "Store No must be the facility code, not the store's display name.",
-            "Crate counts are per trip — they narrow a swap to a route, not to a single stop.",
         ],
     },
     "store_master": {
