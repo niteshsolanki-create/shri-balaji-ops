@@ -119,6 +119,8 @@ input:focus,select:focus{outline:none;border-color:var(--cold)}
 .gap-bad{color:var(--bad)}
 .gap-ok{color:var(--muted)}
 .gap-nodata{color:var(--border);cursor:help}
+.store-link{cursor:pointer;text-decoration:underline;text-decoration-color:transparent;transition:text-decoration-color .15s}
+.store-link:hover{text-decoration-color:var(--cold)}
 .tag-unref{display:inline-block;font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);background:var(--raised);border:1px solid var(--border);border-radius:5px;padding:2px 7px}
 .grid2{display:grid;grid-template-columns:1.55fr 1fr;gap:16px}
 @media(max-width:1040px){.grid2{grid-template-columns:1fr}.kpis{grid-template-columns:1fr 1fr}}
