@@ -1,15 +1,41 @@
 /* Shri Balaji Ops - dashboard client */
 const S = {
   options: null,
-  filters: { date_from: null, date_to: null, departments: [], categories: [], brands: [], stores: [], vehicles: [], reasons: [] },
+  filters: { date_from: null, date_to: null, departments: [], categories: [], brands: [], stores: [], reasons: [] },
   widgets: ['headline', 'trend', 'stores', 'categories', 'products', 'swaps', 'rejects', 'quality'],
-  data: {}, sort: {}
+  data: {}, sort: {}, search: {}
 };
 
 const $ = s => document.querySelector(s);
 const $$ = s => [...document.querySelectorAll(s)];
 const n = v => (v == null ? '—' : Number(v).toLocaleString('en-IN'));
 const pct = v => (v == null ? '—' : Number(v).toFixed(2) + '%');
+
+/**
+ * Filters rows client-side against already-loaded data - no server round
+ * trip, since every table here already has its full result set in the
+ * browser before rendering. Matches if the query is a substring of ANY of
+ * the given fields, case-insensitive, so searching "MLKHFR86" finds it
+ * whether it's sitting in fsn, description, or brand.
+ */
+function searchFilter(rows, query, fields) {
+  if (!query) return rows;
+  const q = query.trim().toLowerCase();
+  if (!q) return rows;
+  return rows.filter(r => fields.some(f => String(r[f] ?? '').toLowerCase().includes(q)));
+}
+
+/** Wires a search box to a live-filtered re-render, remembering the box's
+ * value in S.search so it survives a data refresh (e.g. Apply on filters). */
+function wireSearch(inputId, key, getRows, fields, render) {
+  const el = $(inputId);
+  if (!el) return;
+  el.value = S.search[key] || '';
+  el.oninput = () => {
+    S.search[key] = el.value;
+    render(searchFilter(getRows(), el.value, fields));
+  };
+}
 
 function toast(msg, ms = 4200) {
   const t = document.createElement('div');
@@ -24,6 +50,95 @@ function gapColor(p) {
   if (p >= 1) return 'var(--cold)';
   return 'var(--good)';
 }
+
+/* ---------------- global search ---------------- */
+(function () {
+  const input = $('#globalSearch');
+  const box = $('#globalSearchResults');
+  if (!input || !box) return;
+
+  let timer = null, lastQuery = '', activeReq = 0;
+
+  function close() { box.classList.remove('open'); box.innerHTML = ''; }
+
+  function groupHtml(label, items, renderItem) {
+    if (!items.length) return '';
+    return `<div class="gsr-group-label">${label}</div>` +
+      items.map(renderItem).join('');
+  }
+
+  function render(data, query) {
+    const html =
+      groupHtml('Products', data.products, p => `
+        <div class="gsr-item" data-type="product" data-fsn="${p.fsn}">
+          <span class="gsr-main">${p.title || p.fsn}</span>
+          <span class="gsr-sub">${p.fsn}${p.ean ? ' · ' + p.ean : ''}</span>
+        </div>`) +
+      groupHtml('Stores', data.stores, s => `
+        <div class="gsr-item" data-type="store" data-id="${s.warehouse_id}">
+          <span class="gsr-main">${s.name || s.warehouse_id}</span>
+          <span class="gsr-sub">${s.warehouse_id}</span>
+        </div>`) +
+      groupHtml('Brands', data.brands, b => `
+        <div class="gsr-item" data-type="brand" data-brand="${b}">
+          <span class="gsr-main">${b}</span>
+        </div>`);
+
+    box.innerHTML = html || `<div class="gsr-empty">No matches for "${query}"</div>`;
+    box.classList.add('open');
+
+    box.querySelectorAll('.gsr-item').forEach(el => el.onclick = () => {
+      const type = el.dataset.type;
+      close();
+      input.value = '';
+      if (type === 'product') {
+        goToTab('products');
+        S.search.products = el.dataset.fsn;
+        renderProducts(searchFilter(S.data.products || [], el.dataset.fsn,
+          ['description', 'fsn', 'category', 'brand']));
+        const box2 = $('#prodSearch'); if (box2) box2.value = el.dataset.fsn;
+      } else if (type === 'store') {
+        goToTab('dashboard');
+        S.search.stores = el.dataset.id;
+        renderStores(searchFilter(S.data.stores || [], el.dataset.id, ['name', 'warehouse_id']));
+        const box2 = $('#storeSearch'); if (box2) box2.value = el.dataset.id;
+      } else if (type === 'brand') {
+        goToTab('funnel');
+        loadFunnel().then(() => {
+          S.search.funnel = el.dataset.brand;
+          renderCycleFunnel(searchFilter(S.data.funnel || [], el.dataset.brand,
+            ['brand', 'fsn', 'description']), funnelGroupBy);
+          const box2 = $('#funnelSearch'); if (box2) box2.value = el.dataset.brand;
+        });
+      }
+    });
+  }
+
+  function goToTab(view) {
+    const tab = $$('.tab').find(t => t.dataset.view === view);
+    if (tab) tab.click();
+  }
+
+  input.addEventListener('input', () => {
+    const q = input.value.trim();
+    clearTimeout(timer);
+    if (q.length < 2) { close(); return; }
+    timer = setTimeout(async () => {
+      const reqId = ++activeReq;
+      const r = await fetch('/api/search?q=' + encodeURIComponent(q));
+      if (!r.ok || reqId !== activeReq) return;
+      const data = await r.json();
+      if (reqId !== activeReq) return;
+      lastQuery = q;
+      render(data, q);
+    }, 220);
+  });
+
+  document.addEventListener('click', e => {
+    if (!box.contains(e.target) && e.target !== input) close();
+  });
+  input.addEventListener('keydown', e => { if (e.key === 'Escape') { close(); input.blur(); } });
+})();
 
 /* ---------------- tabs ---------------- */
 $$('.tab').forEach(t => t.onclick = () => {
@@ -94,8 +209,8 @@ document.addEventListener('click', () => $$('.ms-pop').forEach(p => p.classList.
 
 function renderChips() {
   const parts = [];
-  const label = { categories: 'Category', brands: 'Brand', stores: 'Store', vehicles: 'Vehicle' };
-  for (const k of ['categories', 'brands', 'stores', 'vehicles']) {
+  const label = { categories: 'Category', brands: 'Brand', stores: 'Store' };
+  for (const k of ['categories', 'brands', 'stores']) {
     S.filters[k].forEach(v => parts.push(
       `<span class="chip"><b>${label[k]}</b> ${v} <span class="x" data-k="${k}" data-v="${v}">✕</span></span>`));
   }
@@ -128,7 +243,7 @@ function applyQuickRange() {
 $('#quickRange').onchange = () => { applyQuickRange(); load(); };
 $('#applyBtn').onclick = () => load();
 $('#resetBtn').onclick = () => {
-  for (const k of ['categories', 'brands', 'stores', 'vehicles', 'reasons']) S.filters[k] = [];
+  for (const k of ['categories', 'brands', 'stores', 'reasons']) S.filters[k] = [];
   $('#quickRange').value = '7'; applyQuickRange();
   $$('.ms').forEach(el => { syncMulti(el); if (el._render) el._render(); });
   renderChips(); load();
@@ -165,13 +280,18 @@ function renderAll() {
   const d = S.data;
   if (d.headline) { renderKpis(d.headline); renderFunnel(d.headline); }
   if (d.trend) renderTrend(d.trend);
-  if (d.stores) renderStores(d.stores);
+  if (d.stores) { S.data.stores = d.stores; renderStores(searchFilter(d.stores, S.search.stores, ['name', 'warehouse_id'])); }
   if (d.categories) renderCats(d.categories);
-  if (d.products) renderProducts(d.products);
+  if (d.products) { S.data.products = d.products; renderProducts(searchFilter(d.products, S.search.products, ['description', 'fsn', 'category', 'brand'])); }
   if (d.swaps) renderSwaps(d.swaps);
   if (d.rejects) renderRejects(d.rejects);
   if (d.quality) renderQuality(d.quality);
   renderPendingGrns(d.pending_grns);
+
+  wireSearch('#storeSearch', 'stores', () => S.data.stores || [],
+    ['name', 'warehouse_id'], renderStores);
+  wireSearch('#prodSearch', 'products', () => S.data.products || [],
+    ['description', 'fsn', 'category', 'brand'], renderProducts);
 }
 
 /* ---------------- renderers ---------------- */
@@ -322,9 +442,6 @@ function renderSwaps(rows) {
         <div><b style="font-size:13px">${r.description || r.fsn}</b>
           <span class="muted mono" style="font-size:11px;margin-left:8px">${r.date}</span></div>
         <div>
-          ${r.same_vehicle_pairs
-            ? `<span class="pill crit">${r.same_vehicle_pairs} same-vehicle pair${r.same_vehicle_pairs > 1 ? 's' : ''}</span>`
-            : `<span class="pill info">no route link</span>`}
           <span class="pill ${r.spread === 'concentrated' ? 'warn' : 'ok'}">${r.spread}</span>
         </div>
       </div>
@@ -334,9 +451,9 @@ function renderSwaps(rows) {
       </div>
       <div style="display:flex;gap:22px;margin-top:9px;flex-wrap:wrap;font-size:11.5px">
         <div><div class="muted" style="margin-bottom:3px">Excess at</div>
-          ${r.excess_stores.map(s => `<div class="mono">${s.store} +${s.qty}${s.vehicle ? ` <span class="muted">(${s.vehicle})</span>` : ''}</div>`).join('')}</div>
+          ${r.excess_stores.map(s => `<div class="mono">${s.store} +${s.qty}</div>`).join('')}</div>
         <div><div class="muted" style="margin-bottom:3px">Short at</div>
-          ${r.short_stores.map(s => `<div class="mono">${s.store} −${s.qty}${s.vehicle ? ` <span class="muted">(${s.vehicle})</span>` : ''}</div>`).join('')}</div>
+          ${r.short_stores.map(s => `<div class="mono">${s.store} −${s.qty}</div>`).join('')}</div>
       </div>
     </div>`).join('');
 }
@@ -404,7 +521,43 @@ async function loadFunnel() {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ ...S.filters, group_by: funnelGroupBy })
   })).json();
-  renderCycleFunnel(j.rows || [], funnelGroupBy);
+  S.data.funnel = j.rows || [];
+  renderCycleFunnel(searchFilter(S.data.funnel, S.search.funnel,
+    ['brand', 'fsn', 'description']), funnelGroupBy);
+  renderVendors(j.vendors || []);
+  wireSearch('#funnelSearch', 'funnel', () => S.data.funnel || [],
+    ['brand', 'fsn', 'description'], rows => renderCycleFunnel(rows, funnelGroupBy));
+}
+
+function renderVendors(rows) {
+  const el = $('#vendorTbl');
+  if (!el) return;
+  if (!rows.length) {
+    el.innerHTML = '<tbody><tr><td class="empty">No indent data for this filter — '
+      + 'upload an Indent file with Expected Delivery Date and Delivery Date filled in.</td></tr></tbody>';
+    return;
+  }
+  const dash = '<span class="gap-nodata" title="Not enough delivered lines to judge">—</span>';
+  el.innerHTML = `
+    <thead><tr>
+      <th>Brand</th><th class="num">PO lines</th><th class="num">Ordered</th>
+      <th class="num">Delivered</th><th class="num">Fill %</th>
+      <th class="num">On time %</th><th class="num">Avg days late</th><th class="num">Still open</th>
+    </tr></thead>
+    <tbody>${rows.map(r => `
+      <tr>
+        <td class="name">${r.brand}</td>
+        <td class="num">${n(r.po_lines)}</td>
+        <td class="num">${n(r.ordered)}</td>
+        <td class="num">${n(r.delivered)}</td>
+        <td class="num">${r.fill_pct === null ? dash
+          : `<span style="color:${gapColor(100 - r.fill_pct)}">${r.fill_pct}%</span>`}</td>
+        <td class="num">${r.on_time_pct === null ? dash
+          : `<span style="color:${gapColor(100 - r.on_time_pct)}">${r.on_time_pct}%</span>`}</td>
+        <td class="num">${r.avg_days_late ? `<span class="gap-bad">${r.avg_days_late}</span>` : '<span class="gap-ok">0</span>'}</td>
+        <td class="num">${r.open ? n(r.open) : '<span class="gap-ok">0</span>'}</td>
+      </tr>`).join('')}
+    </tbody>`;
 }
 
 function gapCell(val, base) {
@@ -527,7 +680,7 @@ async function loadTemplates() {
 
   $('#tmplList').querySelectorAll('[data-load]').forEach(b => b.onclick = () => {
     const t = rows.find(x => x.id == b.dataset.load);
-    Object.assign(S.filters, { departments: [], categories: [], brands: [], stores: [], vehicles: [], reasons: [] }, t.config.filters);
+    Object.assign(S.filters, { departments: [], categories: [], brands: [], stores: [], reasons: [] }, t.config.filters);
     S.widgets = t.config.widgets.length ? t.config.widgets : S.widgets;
     $('#dateFrom').value = S.filters.date_from || '';
     $('#dateTo').value = S.filters.date_to || '';
@@ -546,7 +699,7 @@ async function loadTemplates() {
 function describeConfig(c) {
   const f = c.filters || {}, bits = [];
   if (f.date_from || f.date_to) bits.push(`${f.date_from || '…'} → ${f.date_to || '…'}`);
-  for (const k of ['categories', 'brands', 'stores', 'vehicles'])
+  for (const k of ['categories', 'brands', 'stores'])
     if (f[k] && f[k].length) bits.push(`${f[k].length} ${k}`);
   bits.push(`${(c.widgets || []).length} panels`);
   return bits.join(' · ');
