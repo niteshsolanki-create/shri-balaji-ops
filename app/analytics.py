@@ -19,7 +19,7 @@ from datetime import date, timedelta
 from sqlalchemy import func, and_, or_, case, distinct
 
 from .models import (SessionLocal, FactStoreReceiving, FactDispatch, FactReject,
-                     FactRoute, FactIndent,
+                     FactIndent,
                      DimStore, DimProduct,
                      DEPARTMENTS, DEPARTMENT_ORDER, UNASSIGNED, department_of,
                      FSN_PREFIX_CATEGORY)
@@ -99,10 +99,6 @@ def _apply(q, model, f, submitted_only=False):
         q = q.filter(model.brand.in_(f["brands"]))
     if f.get("stores"):
         q = q.filter(model.warehouse_id.in_(f["stores"]))
-    if f.get("vehicles"):
-        sub = (SessionLocal().query(distinct(FactRoute.warehouse_id))
-               .filter(FactRoute.vehicle_no.in_(f["vehicles"])))
-        q = q.filter(model.warehouse_id.in_([r[0] for r in sub if r[0]]))
     return q
 
 
@@ -144,6 +140,45 @@ def pending_grns(db, f):
     return sorted(out, key=lambda r: -r["units_awaiting"])
 
 
+def global_search(db, query, limit=12):
+    """
+    One search across everything a person would actually type into a search
+    box: FSN, EAN, product name, brand, store name or ID. Sources DimProduct
+    directly rather than any fact table's row set, because EAN only lives on
+    the product master - no fact table carries it, so searching FSN/EAN/name
+    together is only possible here, not from data already loaded client-side.
+    """
+    q = (query or "").strip()
+    if len(q) < 2:
+        return {"products": [], "stores": [], "brands": []}
+    like = f"%{q}%"
+
+    products = (db.query(DimProduct)
+                .filter(or_(DimProduct.fsn.ilike(like),
+                           DimProduct.ean.ilike(like),
+                           DimProduct.title.ilike(like),
+                           DimProduct.brand.ilike(like)))
+                .limit(limit).all())
+
+    stores = (db.query(DimStore)
+              .filter(or_(DimStore.warehouse_name.ilike(like),
+                         DimStore.warehouse_id.ilike(like)))
+              .limit(limit).all())
+
+    brands = sorted({p.brand for p in products if p.brand} |
+                    {b for b, in db.query(distinct(FactStoreReceiving.brand))
+                     .filter(FactStoreReceiving.brand.ilike(like)).limit(limit).all()})
+
+    return {
+        "products": [{"fsn": p.fsn, "ean": p.ean, "title": p.title,
+                      "brand": p.brand, "category": p.category,
+                      "department": department_of(p.category)} for p in products],
+        "stores": [{"warehouse_id": s.warehouse_id, "name": s.warehouse_name}
+                  for s in stores],
+        "brands": brands[:limit],
+    }
+
+
 def filter_options(db):
     def col(model, c):
         return [r[0] for r in db.query(distinct(c)).filter(c.isnot(None)).all() if r[0]]
@@ -172,7 +207,6 @@ def filter_options(db):
         "category_departments": {c: department_of(c) for c in cats},
         "brands": brands,
         "stores": [{"id": s.warehouse_id, "name": s.warehouse_name} for s in stores],
-        "vehicles": sorted(col(FactRoute, FactRoute.vehicle_no)),
         "reasons": sorted(col(FactReject, FactReject.reason)),
         "date_min": str(dr[0]) if dr and dr[0] else None,
         "date_max": str(dr[1]) if dr and dr[1] else None,
@@ -339,11 +373,23 @@ def stage_funnel(db, f, group_by="brand"):
     Amul doing". group_by 'fsn' keeps one row per (brand, fsn) - useful for
     "which specific SKU is the problem".
     """
-    indent = _stage_rows(db, FactIndent, FactIndent.indent_date,
+    # The PO and its delivery are separate events on separate dates, so they
+    # are queried separately. Asking for "what did Amul deliver on the 14th"
+    # must look at delivery_date; asking "what did we order on the 12th" must
+    # look at indent_date. Merged afterwards on (brand, fsn).
+    raised = _stage_rows(db, FactIndent, FactIndent.indent_date,
                          FactIndent.brand, FactIndent.fsn,
                          fsn_dept_expr(FactIndent.fsn),
-                         {"indent_qty": FactIndent.po_qty,
-                          "inbound_received": FactIndent.final_received_qty}, f)
+                         {"indent_qty": FactIndent.po_qty}, f)
+    delivered = _stage_rows(db, FactIndent, FactIndent.delivery_date,
+                            FactIndent.brand, FactIndent.fsn,
+                            fsn_dept_expr(FactIndent.fsn),
+                            {"inbound_received": FactIndent.final_received_qty}, f)
+    indent = {}
+    for k, v in raised.items():
+        indent.setdefault(k, {}).update(v)
+    for k, v in delivered.items():
+        indent.setdefault(k, {}).update(v)
     batched = _stage_rows(db, FactDispatch, FactDispatch.dispatch_date,
                           FactDispatch.brand, FactDispatch.fsn,
                           dept_expr(FactDispatch),
@@ -385,6 +431,11 @@ def stage_funnel(db, f, group_by="brand"):
         row.update(batched.get(k, {}))
         row.update(received.get(k, {}))
         row["brand"], row["fsn"] = k
+        # A PO with no delivery row in this window hasn't been delivered yet
+        # (or was delivered outside the dates). Either way it is pending, not
+        # short - so the gap stays unknown rather than showing the full PO
+        # quantity as a vendor failure.
+        row["has_delivery"] = k in delivered
         desc, cat = titles.get(row["fsn"], ("", ""))
         row["description"], row["category"] = desc, cat
         fine.append(row)
@@ -395,7 +446,7 @@ def stage_funnel(db, f, group_by="brand"):
         # zero - which renders identically to a clean day. None means "no
         # data to compare", and the UI shows it as a dash, not a zero.
         row["vendor_gap"] = (max(row["indent_qty"] - row["inbound_received"], 0)
-                             if row["indent_qty"] else None)
+                             if row["indent_qty"] and row.get("has_delivery") else None)
         row["fulfillment_gap"] = (max(row["store_ordered"] - row["picked"], 0)
                                   if row["store_ordered"] else None)
         row["claimable_gap"] = (max(row["picked"] - row["store_received"] - row["damaged"], 0)
@@ -407,13 +458,77 @@ def stage_funnel(db, f, group_by="brand"):
     else:
         agg = {}
         for row in fine:
-            a = agg.setdefault(row["brand"], {"brand": row["brand"], **dict(ZERO_FUNNEL)})
+            a = agg.setdefault(row["brand"], {"brand": row["brand"],
+                                              "has_delivery": False,
+                                              **dict(ZERO_FUNNEL)})
             for k in ZERO_FUNNEL:
                 a[k] += row[k]
+            a["has_delivery"] = a["has_delivery"] or row.get("has_delivery", False)
         out = [with_gaps(a) for a in agg.values()]
 
     return sorted(out, key=lambda r: -(r["indent_qty"] + r["store_ordered"]
                                        + r["store_received"]))
+
+
+def vendor_reliability(db, f):
+    """
+    Vendor performance on BOTH axes: did they send the full quantity, and
+    did they send it when they said they would.
+
+    These fail independently and the distinction is operational. A vendor at
+    100% fill but chronically a day late empties your shelves exactly like
+    one who short-ships - but the fix is different: chase the schedule, not
+    the quantity. Quantity alone can't tell them apart.
+
+    Only rows with BOTH an expected and an actual delivery date count toward
+    lateness; a PO that hasn't arrived yet isn't late, it's open.
+    """
+    q = db.query(FactIndent.brand,
+                 FactIndent.expected_delivery_date,
+                 FactIndent.delivery_date,
+                 FactIndent.po_qty,
+                 FactIndent.final_received_qty)
+    if f.get("date_from"):
+        q = q.filter(FactIndent.indent_date >= f["date_from"])
+    if f.get("date_to"):
+        q = q.filter(FactIndent.indent_date <= f["date_to"])
+    if f.get("brands"):
+        q = q.filter(FactIndent.brand.in_(f["brands"]))
+    if f.get("departments"):
+        q = q.filter(fsn_dept_expr(FactIndent.fsn).in_(f["departments"]))
+
+    agg = {}
+    for brand, exp_d, act_d, po, recv in q.all():
+        b = brand or "Unknown"
+        a = agg.setdefault(b, {"brand": b, "po_lines": 0, "ordered": 0,
+                               "delivered": 0, "on_time": 0, "late": 0,
+                               "late_days": 0, "open": 0, "worst_late": 0})
+        a["po_lines"] += 1
+        a["ordered"] += int(po or 0)
+        a["delivered"] += int(recv or 0)
+        if act_d is None:
+            a["open"] += 1
+        elif exp_d is not None:
+            days = (act_d - exp_d).days
+            if days > 0:
+                a["late"] += 1
+                a["late_days"] += days
+                a["worst_late"] = max(a["worst_late"], days)
+            else:
+                a["on_time"] += 1
+
+    out = []
+    for a in agg.values():
+        judged = a["on_time"] + a["late"]
+        a["on_time_pct"] = round(100 * a["on_time"] / judged, 1) if judged else None
+        a["avg_days_late"] = round(a["late_days"] / a["late"], 1) if a["late"] else 0
+        a["fill_pct"] = (round(100 * a["delivered"] / a["ordered"], 1)
+                         if a["ordered"] else None)
+        a["short_units"] = max(a["ordered"] - a["delivered"], 0)
+        out.append(a)
+    # Worst fill first; brands with nothing judged yet sort last.
+    return sorted(out, key=lambda r: (r["fill_pct"] is None,
+                                      r["fill_pct"] if r["fill_pct"] is not None else 999))
 
 
 def department_breakdown(db, f):
@@ -564,14 +679,15 @@ def product_detail(db, f, limit=2000):
 
 def swap_candidates(db, f):
     """
-    Excess at one store alongside shortage at another, same FSN, same day,
-    same vehicle.
+    Excess at one store alongside shortage at another, same FSN, same day.
 
-    Deliberately does NOT classify what happened. On 11-Aug the magnitude
-    match alone was misleading: F&V items showed 143 units short spread over
-    19 stores against 8 units excess elsewhere, which is systemic under-count,
-    not a crate swap. The route link is what separates the two, so it is shown
-    as evidence for the operator to judge.
+    Deliberately does NOT classify what happened - a magnitude match alone
+    can be misleading. On 11-Aug, F&V showed 143 units short spread over 19
+    stores against 8 units excess elsewhere: that shape is a systemic
+    under-count, not a crate swap, and no amount of matching totals changes
+    that. 'spread' is left as the signal for the operator to read: a
+    shortage concentrated at a couple of stores plausibly IS a misdelivery
+    worth a phone call; one spread thin across many stores usually isn't.
     """
     rows = _apply(db.query(
         FactStoreReceiving.invoice_date, FactStoreReceiving.fsn,
@@ -579,11 +695,6 @@ def swap_candidates(db, f):
         FactStoreReceiving.expected_qty, FactStoreReceiving.received_qty,
         FactStoreReceiving.excess_qty,
     ), FactStoreReceiving, f, submitted_only=True).all()
-
-    routes = {}
-    for r in db.query(FactRoute).all():
-        if r.warehouse_id:
-            routes[(r.date, r.warehouse_id)] = r.vehicle_no
 
     by_key = {}
     for d, fsn, wh, desc, exp, rec, exc in rows:
@@ -603,21 +714,17 @@ def swap_candidates(db, f):
             continue
         ts = sum(x[1] for x in v["short"])
         te = sum(x[1] for x in v["excess"])
-        ex_vehicles = {routes.get((d, wh)) for wh, _ in v["excess"]}
-        shared = [(wh, q) for wh, q in v["short"]
-                  if routes.get((d, wh)) and routes.get((d, wh)) in ex_vehicles]
         out.append({
             "date": str(d), "fsn": fsn, "description": v["desc"],
             "total_short": ts, "total_excess": te,
             "stores_short": len(v["short"]), "stores_excess": len(v["excess"]),
-            "excess_stores": [{"store": w, "qty": q, "vehicle": routes.get((d, w))}
+            "excess_stores": [{"store": w, "qty": q}
                               for w, q in sorted(v["excess"], key=lambda x: -x[1])],
-            "short_stores": [{"store": w, "qty": q, "vehicle": routes.get((d, w))}
+            "short_stores": [{"store": w, "qty": q}
                              for w, q in sorted(v["short"], key=lambda x: -x[1])][:12],
-            "same_vehicle_pairs": len(shared),
             "spread": "concentrated" if len(v["short"]) <= 3 else "spread",
         })
-    return sorted(out, key=lambda r: (-r["same_vehicle_pairs"], -r["total_excess"]))
+    return sorted(out, key=lambda r: -r["total_excess"])
 
 
 def reject_breakdown(db, f):
