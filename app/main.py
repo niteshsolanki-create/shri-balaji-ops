@@ -148,8 +148,13 @@ def parse_filters(payload: dict):
     return {"date_from": dt("date_from"), "date_to": dt("date_to"),
             "departments": lst("departments"),
             "categories": lst("categories"), "brands": lst("brands"),
-            "stores": lst("stores"), "vehicles": lst("vehicles"),
+            "stores": lst("stores"),
             "reasons": lst("reasons")}
+
+
+@app.get("/api/search")
+def api_search(q: str = "", user=Depends(current_user), db=Depends(get_db)):
+    return A.global_search(db, q)
 
 
 @app.get("/api/options")
@@ -161,7 +166,9 @@ def api_options(user=Depends(current_user), db=Depends(get_db)):
 def api_funnel(payload: dict, user=Depends(current_user), db=Depends(get_db)):
     f = parse_filters(payload)
     group_by = "fsn" if payload.get("group_by") == "fsn" else "brand"
-    return {"rows": A.stage_funnel(db, f, group_by=group_by), "group_by": group_by}
+    return {"rows": A.stage_funnel(db, f, group_by=group_by),
+            "group_by": group_by,
+            "vendors": A.vendor_reliability(db, f)}
 
 
 @app.post("/api/dashboard")
