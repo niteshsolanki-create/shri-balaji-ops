@@ -12,6 +12,11 @@
     <div class="mark">SB</div>
     <div><b>Shri Balaji Ops</b><span id="coverage">loading…</span></div>
   </div>
+  <div class="global-search-wrap">
+    <input id="globalSearch" class="global-search" autocomplete="off"
+           placeholder="Search FSN, EAN, product, brand or store…">
+    <div id="globalSearchResults" class="global-search-results"></div>
+  </div>
   <div class="topbar-right">
     <span>{{ user.name }}</span>
     <span class="role-chip">{{ user.role }}</span>
@@ -58,7 +63,6 @@
       <div class="field" style="margin:0"><label>Category</label><div class="ms" data-key="categories"></div></div>
       <div class="field" style="margin:0"><label>Brand</label><div class="ms" data-key="brands"></div></div>
       <div class="field" style="margin:0"><label>Store</label><div class="ms" data-key="stores"></div></div>
-      <div class="field" style="margin:0"><label>Vehicle</label><div class="ms" data-key="vehicles"></div></div>
     </div>
     <div class="chipbar" id="chipbar"></div>
   </div>
@@ -96,7 +100,9 @@
         <div class="panel-title">Store ranking</div>
         <div class="panel-sub">A store is marked <b>Repeat</b> only when it breaches on most of its
           loaded days with meaningful volume — one bad day is noise, not a pattern.</div>
-      </div></div>
+      </div>
+      <div class="panel-actions"><input id="storeSearch" class="search-box" placeholder="Search store…"></div>
+      </div>
       <div class="tbl-wrap"><table id="storeTbl"></table></div>
     </div>
     <div class="panel">
@@ -116,7 +122,10 @@
         with a gap, so a clean SKU is distinguishable from one that stopped being ordered. A product short
         at nearly every store on the same day points upstream — to picking or counting — not to the stores.</div>
     </div>
-    <div class="panel-actions"><span id="prodCount" class="panel-sub"></span></div>
+    <div class="panel-actions">
+      <input id="prodSearch" class="search-box" placeholder="Search product, FSN, category or brand…">
+      <span id="prodCount" class="panel-sub"></span>
+    </div>
     </div>
     <div class="tbl-wrap"><table id="prodTbl"></table></div>
   </div>
@@ -128,8 +137,8 @@
     <div class="panel-head"><div>
       <div class="panel-title">Excess / shortage cross-reference</div>
       <div class="panel-sub">Where the same product was short at one store and excess at another on the same
-        day. <b>Same-vehicle</b> pairs are the ones worth a phone call; a shortage spread thin across many
-        stores usually means an upstream count problem, not a crate swap. The evidence is laid out —
+        day — worth a phone call to check for a misdelivered crate. A shortage spread thin across many
+        stores usually means an upstream count problem instead, not a swap. The evidence is laid out —
         the call is yours.</div>
     </div></div>
     <div id="swapList"></div>
@@ -178,6 +187,7 @@
           arguable with Flipkart.</div>
       </div>
       <div class="panel-actions">
+        <input id="funnelSearch" class="search-box" placeholder="Search brand, product or FSN…">
         <div class="seg" id="funnelGroupBy">
           <button class="seg-btn active" data-v="brand">By brand</button>
           <button class="seg-btn" data-v="fsn">By product</button>
@@ -185,6 +195,17 @@
       </div>
     </div>
     <div class="tbl-wrap"><table id="funnelTbl"></table></div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-head"><div>
+      <div class="panel-title">Vendor reliability</div>
+      <div class="panel-sub">Two ways a supplier fails, and they're different problems.
+        <b>Fill</b> is whether they sent the full quantity. <b>On time</b> is whether they sent it
+        when they said they would. A vendor at 100% fill who's always a day late empties your
+        shelves just the same — but you fix that by chasing the schedule, not the quantity.</div>
+    </div></div>
+    <div class="tbl-wrap"><table id="vendorTbl"></table></div>
   </div>
 </div>
 
