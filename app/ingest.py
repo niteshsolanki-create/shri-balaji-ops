@@ -40,6 +40,7 @@ de-duplication for no benefit.
 """
 import io
 import os
+import re
 import csv
 import tempfile
 from pathlib import Path
@@ -107,6 +108,23 @@ def detect_type(df):
 
 def _col(df, *needles):
     for c in df.columns:
+        n = str(c).strip().lower().replace("\n", " ")
+        if all(x in n for x in needles):
+            return c
+    return None
+
+
+def _col_not(df, needles, exclude):
+    """
+    Same substring match as _col, but skips a column already claimed by
+    another field. Needed where one header is a substring of another -
+    "Delivery Date" is contained in "Expected Delivery Date", so a plain
+    search returns whichever appears first and both fields end up reading
+    the same column.
+    """
+    for c in df.columns:
+        if c == exclude:
+            continue
         n = str(c).strip().lower().replace("\n", " ")
         if all(x in n for x in needles):
             return c
@@ -191,14 +209,56 @@ def v_int_null(s):
     return pd.to_numeric(s, errors="coerce").astype("Int64")
 
 
+_ISO_LIKE = re.compile(r"^\s*\d{4}-\d{1,2}-\d{1,2}")
+
+
 def v_date(s):
-    return pd.to_datetime(s, errors="coerce", dayfirst=True)
+    """
+    Parse dates, choosing the convention per value rather than globally.
+
+    dayfirst=True is right for the DD-MM-YYYY that Flipkart's Indent export
+    uses, but applied to an ISO date it reads YYYY-MM-DD as YYYY-DD-MM:
+    '2026-08-12' silently became 12 December, four months out, and in a
+    mixed column the values it couldn't flip ('2026-08-14', no 14th month)
+    turned into NaT and their rows vanished. Nothing in the file looked
+    wrong either way.
+
+    So: anything starting with a 4-digit year is parsed as ISO with no
+    dayfirst; everything else keeps dayfirst for DD-MM-YYYY.
+    """
+    if pd.api.types.is_datetime64_any_dtype(s):
+        return s
+
+    txt = s.astype(str).str.strip()
+    iso = txt.str.match(_ISO_LIKE).fillna(False)
+
+    out = pd.Series(pd.NaT, index=s.index, dtype="datetime64[ns]")
+    if iso.any():
+        out.loc[iso] = pd.to_datetime(txt[iso], errors="coerce")
+    if (~iso).any():
+        out.loc[~iso] = pd.to_datetime(txt[~iso], errors="coerce", dayfirst=True)
+    return out
 
 
 def v_str(s, lower=False, maxlen=None):
     out = s.astype("string").fillna("").str.strip()
     if lower:
         out = out.str.lower()
+    if maxlen:
+        out = out.str.slice(0, maxlen)
+    return out
+
+
+def v_code(s, maxlen=None):
+    """
+    For numeric-looking ID codes (EAN, barcodes) that Excel silently reads
+    as float64. Plain v_str on a float column stringifies the float as-is -
+    an EAN of 8901262260091 becomes "8901262260091.0". Strip a trailing
+    ".0" specifically, rather than truncating decimals generally, since a
+    real code should never have had a fractional part to begin with.
+    """
+    out = v_str(s, maxlen=None)
+    out = out.str.replace(r"\.0$", "", regex=True)
     if maxlen:
         out = out.str.slice(0, maxlen)
     return out
@@ -333,7 +393,7 @@ def load_product_master(db, df, ctx, progress=None, replace=True):
     n_in = len(df)
     out = pd.DataFrame({
         "fsn": v_str(df[_col(df, "fsn")]),
-        "ean": v_str(df[_col(df, "ean")], maxlen=20),
+        "ean": v_code(df[_col(df, "ean")], maxlen=20),
         "brand": v_str(df[_col(df, "brand")]).map(canon_brand),
         "category": df[_col(df, "category")].map(canon_category),
         "title": v_str(df[_col(df, "title")]),
@@ -485,7 +545,7 @@ def load_rejects(db, df, ctx, progress=None, replace=True):
     fsn = v_str(df[fsn_c])
     out = pd.DataFrame({
         "date": dt.dt.date,
-        "ean": v_str(df[_col(df, "ean")], maxlen=20),
+        "ean": v_code(df[_col(df, "ean")], maxlen=20),
         "fsn": fsn,
         "product": v_str(df[_col(df, "product")]),
         "brand": v_str(df[_col(df, "brand")]).map(canon_brand),
@@ -545,11 +605,27 @@ def load_indent(db, df, ctx, progress=None, replace=True):
         _replace_dates(db, FactIndent, FactIndent.indent_date, dates)
 
     frq, pod_c = _col(df, "final received"), _col(df, "po date")
-    ref_c = _col(df, "po reference")
+    po_c = _col(df, "po number") or _col(df, "po no")
+    # "delivery date" is a substring of "expected delivery date", so the
+    # expected column has to be resolved FIRST and excluded, or both
+    # variables end up reading the same column.
+    exp_c = (_col(df, "expected delivery") or _col(df, "ds delivery")
+             or _col(df, "promised"))
+    del_c = None
+    for cand in (("actual", "delivery"), ("delivery", "date"), ("delivered",)):
+        c = _col_not(df, cand, exp_c)
+        if c is not None:
+            del_c = c
+            break
+    deliv = v_date(df[del_c]) if del_c else None
+    expect = v_date(df[exp_c]) if exp_c else None
+
     out = pd.DataFrame({
+        "po_number": v_str(df[po_c]) if po_c else "",
         "indent_date": dt.dt.date,
         "po_date": v_date(df[pod_c]).dt.date if pod_c else None,
-        "po_reference": v_str(df[ref_c]) if ref_c else "",
+        "expected_delivery_date": expect.dt.date if expect is not None else None,
+        "delivery_date": deliv.dt.date if deliv is not None else None,
         "brand": v_str(df[_col(df, "brand")]).map(canon_brand),
         "fsn": v_str(df[_col(df, "fsn")]),
         "po_qty": v_int(df[_col(df, "po qty")]),
@@ -557,15 +633,31 @@ def load_indent(db, df, ctx, progress=None, replace=True):
         "title": v_str(df[_col(df, "title")]),
         "final_received_qty": v_int_null(df[frq]) if frq else None,
     })
+
+    # PO Number is the real key - it's the same self-generated, always-
+    # unique number Zoho reconciles GRN against, so (po_number, fsn) is the
+    # correct identity for a PO line regardless of what date it lands on.
+    # Rows with a blank PO Number can't be checked this way and fall back to
+    # the old (date, brand, fsn) guard.
+    has_po = out["po_number"] != ""
+    key = ["po_number", "fsn"]
+    dup = out[has_po & out.duplicated(subset=key, keep=False) & (out["po_qty"] > 0)]
+    double_counted = int(dup.groupby(key).size().gt(1).sum()) if len(dup) else 0
+    if (~has_po).any():
+        key2 = ["indent_date", "brand", "fsn"]
+        dup2 = out[~has_po & out.duplicated(subset=key2, keep=False) & (out["po_qty"] > 0)]
+        double_counted += int(dup2.groupby(key2).size().gt(1).sum()) if len(dup2) else 0
+
     cols = list(out.columns)
     n = copy_into(out, "fact_indent", cols, progress)
 
-    # Counted as rows-with-data so a partially-closed loop across chunks
-    # doesn't read as fully open.
     closed = int(df[frq].notna().sum()) if frq else 0
-    has_ref = bool(ref_c) and not out["po_reference"].eq("").all()
+    dated = int(deliv.notna().sum()) if deliv is not None else 0
     return n, 0, dates, {"indent_rows": len(df), "indent_closed": closed,
-                         "indent_has_ref": 1 if has_ref else 0}
+                         "indent_delivery_dated": dated,
+                         "indent_has_delivery_col": 1 if del_c else 0,
+                         "indent_has_po_col": 1 if po_c else 0,
+                         "indent_double_counted": double_counted}
 
 
 LOADERS = {
@@ -638,15 +730,30 @@ def summarise(ftype, stats, dates, loaded):
             notes.append("No store attribution in this file - rejects can't be "
                          "traced to a specific darkstore.")
     elif ftype == "route":
-        notes.append("Crate counts are per-vehicle, per-trip - they narrow a "
-                     "swap to a route, not to a specific stop.")
+        notes.append("Loaded as a manual reference log - it no longer feeds any "
+                     "swap detection on the Route & Swaps tab.")
     elif ftype == "indent":
         if stats.get("indent_rows") and not stats.get("indent_closed"):
             notes.append("'Final Received Qty' is empty for every row - the indent "
                          "loop isn't being closed operationally.")
-        if not stats.get("indent_has_ref"):
-            notes.append("No PO Reference in this file - vendor gap will be matched by "
-                         "brand + product over the date range, not by exact PO.")
+        if not stats.get("indent_has_delivery_col"):
+            notes.append("No 'Delivery Date' column - deliveries will be counted on the "
+                         "day the PO was raised, not the day stock arrived. Add the column "
+                         "so a PO raised Monday and delivered Wednesday reports correctly.")
+        elif stats.get("indent_closed") and not stats.get("indent_delivery_dated"):
+            notes.append("'Final Received Qty' is filled but 'Delivery Date' is blank - "
+                         "those deliveries won't appear on any date until it's filled in.")
+        if not stats.get("indent_has_expected_col"):
+            notes.append("No 'Expected Delivery Date' column - late deliveries can't be "
+                         "measured. A vendor who always delivers in full but two days late "
+                         "will look perfect.")
+        elif stats.get("indent_late"):
+            notes.append(f"{stats['indent_late']} delivery line(s) arrived later than the "
+                         "expected date - see vendor reliability on the Cycle tab.")
+        if stats.get("indent_double_counted"):
+            notes.append(f"{stats['indent_double_counted']} PO(s) appear on more than one row "
+                         "with PO Qty filled on each. For a split delivery, leave PO Qty blank "
+                         "on the second row or the order is counted twice.")
     return notes
 
 
