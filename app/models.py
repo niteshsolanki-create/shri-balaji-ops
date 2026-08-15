@@ -280,12 +280,31 @@ class FactRoute(Base):
 
 
 class FactIndent(Base):
+    """
+    One row per PO line, keyed on PO Number - the same self-generated,
+    always-unique number Zoho reconciles GRN against. That is the real
+    linkage between a PO and its eventual receipt, not a date guess: a
+    product with a naturally longer lead time isn't "late", it arrives
+    exactly when that product always does, and store indent is planned
+    around that already. Dates below are informational, not a pass/fail.
+
+      indent_date            - when the PO was raised          -> owns po_qty
+      expected_delivery_date - your own planning estimate, if kept
+      delivery_date          - when it actually arrived        -> owns final_received_qty
+
+    (po_number, fsn) is the natural unique key for a line item, since one PO
+    can cover several products. A PO settled in more than one GRN session
+    (rare) still gets one row - update delivery_date and
+    final_received_qty as Zoho's own running total, the same way Zoho
+    itself reconciles it.
+    """
     __tablename__ = "fact_indent"
     id = Column(Integer, primary_key=True)
+    po_number = Column(String(60), index=True)
     indent_date = Column(Date, index=True)
     po_date = Column(Date)
-    ds_delivery_date = Column(Date)
-    po_reference = Column(String(60), index=True)
+    expected_delivery_date = Column(Date, index=True)
+    delivery_date = Column(Date, index=True)
     brand = Column(String(80))
     fsn = Column(String(40), index=True)
     po_qty = Column(Integer, default=0)

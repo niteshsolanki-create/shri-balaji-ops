@@ -64,6 +64,13 @@ In your service's **Variables** tab, add:
 | `ADMIN_PASSWORD` | a strong password |
 | `SECRET_KEY` | any long random string |
 
+(Optional, import tuning — the defaults are fine for most boxes:)
+
+| Variable | Default | What it does |
+|---|---|---|
+| `INGEST_CHUNK_ROWS` | `50000` | Rows held in memory at once during import. **Import memory scales with this number, not with file size** — a 200MB file and a 2GB file use the same RAM. Lower it to ~20000 on a 512MB container; raise it to 100000+ on a 4GB box for faster imports. |
+| `MAX_UPLOAD_MB` | `1024` | Upload size ceiling. A file over this is rejected with a clear message instead of being accepted and then failing. |
+
 (Optional, for email digests — Gmail needs an *app password*, not your normal one:)
 
 | `SMTP_HOST` | `smtp.gmail.com` |
